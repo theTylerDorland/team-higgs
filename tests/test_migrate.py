@@ -141,6 +141,37 @@ def test_0003_single_step_round_trips() -> None:
     assert "task_id" in pr_cols
 
 
+_RUN_TOKEN_COLUMNS = {
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+}
+
+
+def test_0004_token_columns_present() -> None:
+    with _conn() as conn:
+        cols = _columns(conn, "runs")
+    assert cols >= _RUN_TOKEN_COLUMNS
+    assert "token_cost" in cols  # legacy lump left in place
+
+
+def test_0004_single_step_round_trips() -> None:
+    """0004's own downgrade/upgrade: the four typed token columns disappear at
+    0003 and return at head. Restores head so later tests see the full schema."""
+    cfg = make_config()
+    command.downgrade(cfg, "0003")
+    with _conn() as conn:
+        cols = _columns(conn, "runs")
+    assert _RUN_TOKEN_COLUMNS & cols == set()
+    assert "token_cost" in cols  # downgrade must not touch the legacy column
+
+    command.upgrade(cfg, "head")
+    with _conn() as conn:
+        cols = _columns(conn, "runs")
+    assert cols >= _RUN_TOKEN_COLUMNS
+
+
 def test_0003_backfill_seeds_synthetic_task_event() -> None:
     """The generic backfill seeds one `actor='backfill'` event per pre-existing
     task on upgrade — no hard-coded ids. Restores head at the end."""

@@ -1,8 +1,9 @@
--- Agent platform state store, schema v2 (through migration 0003).
+-- Agent platform state store, schema v2.1 (through migration 0004).
 --
 -- REFERENCE ONLY. As of emctl task 1, the operative schema truth is the
 -- Alembic migration set under emctl/migrations/ (0001 reproduces the v1
--- baseline; 0003 adds the observability v2 surface reflected here).
+-- baseline; 0003 adds the observability v2 surface; 0004 adds the typed
+-- token columns on `runs`, all reflected here).
 -- `emctl migrate` applies those migrations; this file is no longer applied
 -- to any database (the docker-compose init mount was removed to avoid
 -- colliding with Alembic). Change the schema by adding a migration, then
@@ -52,9 +53,18 @@ CREATE TABLE runs (
     ended_at    TIMESTAMPTZ,
     outcome     TEXT CHECK (outcome IN ('done','negative-result','blocked',
                                         'failed')),
-    token_cost  BIGINT,
+    token_cost  BIGINT,           -- legacy lump (~output only); superseded for
+                                   -- cost by the typed columns below
     cost_usd    NUMERIC(10,4),   -- compute/API spend beyond tokens (ML lanes)
-    log_ref     TEXT
+    log_ref     TEXT,
+    -- schema v2.1 (migration 0004): per-run token usage by type, for accurate
+    -- (cache-dominated) API cost projection. All nullable; NULL when no
+    -- transcript was aggregated. cache_read/write map to the API's
+    -- cache_read_input_tokens / cache_creation_input_tokens.
+    input_tokens        BIGINT,
+    output_tokens       BIGINT,
+    cache_read_tokens   BIGINT,
+    cache_write_tokens  BIGINT
 );
 
 CREATE TABLE prs (

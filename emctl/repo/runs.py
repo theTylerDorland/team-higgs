@@ -13,6 +13,20 @@ from emctl.repo import _sql
 
 Row = _sql.Row
 
+# The four typed token columns (migration 0004). Order is display-only.
+TOKEN_COLUMNS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+
+
+def _token_values(tokens: dict[str, int | None]) -> dict[str, Any]:
+    """Keep only the token columns that were actually supplied (not None), so
+    an omitted flag never overwrites a stored value with NULL."""
+    return {col: tokens[col] for col in TOKEN_COLUMNS if tokens.get(col) is not None}
+
 
 def start(
     conn: Conn, *, task_id: int | None, role: str, model: str, mode: str
@@ -43,6 +57,7 @@ def finish(
     token_cost: int | None,
     cost_usd: Decimal | None,
     log_ref: str | None,
+    tokens: dict[str, int | None] | None = None,
 ) -> Row:
     if run_id is None:
         if task_id is None:
@@ -56,5 +71,36 @@ def finish(
         values["cost_usd"] = cost_usd
     if log_ref is not None:
         values["log_ref"] = log_ref
+    if tokens is not None:
+        values.update(_token_values(tokens))
     extra = [sql.SQL("ended_at = now()")]
     return _sql.update(conn, "runs", "run", run_id, values, extra=extra)
+
+
+def update(
+    conn: Conn,
+    *,
+    run_id: int,
+    outcome: str | None,
+    token_cost: int | None,
+    cost_usd: Decimal | None,
+    log_ref: str | None,
+    tokens: dict[str, int | None] | None = None,
+) -> Row:
+    """Amend an already-finished run (correction / historical backfill).
+
+    Only supplied fields are written; ``ended_at`` is left as-is (this is not a
+    finish). An unknown ``run_id`` surfaces as NotFoundError via ``_sql.update``
+    (or ``_sql.get`` when no fields were supplied)."""
+    values: dict[str, Any] = {}
+    if outcome is not None:
+        values["outcome"] = outcome
+    if token_cost is not None:
+        values["token_cost"] = token_cost
+    if cost_usd is not None:
+        values["cost_usd"] = cost_usd
+    if log_ref is not None:
+        values["log_ref"] = log_ref
+    if tokens is not None:
+        values.update(_token_values(tokens))
+    return _sql.update(conn, "runs", "run", run_id, values)
