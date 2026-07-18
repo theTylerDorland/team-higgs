@@ -51,7 +51,7 @@ decisions below.
 
 ## 4. Architecture
 
-Three thin layers keep 13 command groups a *pattern*, not 13 bespoke
+Three thin layers keep 12 command groups a *pattern*, not 12 bespoke
 builds:
 
 ```
@@ -142,7 +142,7 @@ id → `NotFoundError` (exit 3), never a silent no-op.
 ## 7. Migrations (Alembic — Tyler's call)
 
 - `versions/0001_initial_v1_schema.py` faithfully reproduces
-  `db/schema.sql`: all 13 tables, every CHECK constraint, defaults
+  `db/schema.sql`: all 12 tables, every CHECK constraint, defaults
   (including `depends_on '{}'`), the 5 partial/normal indexes, UNIQUE
   constraints, and FKs. `downgrade()` drops everything in FK-safe order and
   is exercised by tests.
@@ -156,7 +156,7 @@ id → `NotFoundError` (exit 3), never a silent no-op.
     becomes `docker compose up` → `emctl migrate`.
   - Keep `db/schema.sql` as the v1 **reference** with a header note pointing
     at `emctl/migrations/` as the operative source going forward.
-  - A test asserts the migrated schema matches intent: all 13 tables + named
+  - A test asserts the migrated schema matches intent: all 12 tables + named
     indexes exist, and representative CHECK constraints reject invalid
     values.
 
