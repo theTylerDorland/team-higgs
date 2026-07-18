@@ -110,7 +110,7 @@ column name and type in `db/schema.sql`.
 | `artifact create\|decide\|list` | `--project --task --type` (mockup\|diagram\|spec\|schema\|model\|eval-set\|prompt) `--path`. `decide --artifact <id> --status` (approved\|rejected\|superseded) `--notes` (+ sets `decided_at`). |
 | `question add\|answer\|list` | `--project --body --blocking`. `answer --question <id> --answer` (+ `answered_at`). `list --blocking` filters open blockers. |
 | `decision add\|list` | `--project --title --context --decision`. |
-| `metric define\|update\|list\|report` | `--name` `--query`→`definition` `--rationale` `--status` (proposed\|active\|retired). `report --name` runs the stored `definition` **in a READ ONLY transaction** and renders rows (see §6, §8). |
+| `metric define\|update\|list\|report` | `--name` `--query`→`definition` `--rationale` `--status` (proposed\|active\|retired). `report --name` executes the stored `definition` under the §6 layered read-only controls (least-privilege role + single-statement + READ ONLY tx) and renders rows (see §6, §8). |
 | `learning add\|list\|resolve` | `--category` (start\|stop\|keep\|question) `--observation`→`observation` `--evidence`; `filed_by` from `--role`. `resolve --learning <id> --retro`→sets `status=resolved`, `retro_id`. `list --category --status`. |
 | `debt add\|list\|resolve\|merge` | `--where`→`location` (required) `--kind` (duplication\|coupling\|missing-tests\|pattern-drift\|dead-code\|docs\|other) `--severity` (high\|medium\|low) `--evidence` (required); `filed_by` from `--role`. `resolve --debt <id> --resolved-ref`. `merge --into <keeper_id> <dup_id>...`→each dup `status=resolved` with a pointer, keeper `recurrence += count`. |
 | `retro open\|close\|list` | `--trigger --doc-path`. `close --retro <id>`→`closed_at`. |
@@ -132,12 +132,27 @@ id → `NotFoundError` (exit 3), never a silent no-op.
   `(project, github_pr)`), generic=1. psycopg `IntegrityError` /
   `CheckViolation` are caught in `repo`/`errors` and mapped to these — raw
   SQL, tracebacks, and connection strings never reach stdout/stderr.
-- **`metric report` trust boundary.** The stored `definition` is
-  operator-authored SQL (written via `metric define` by the EM), not
-  external input. It still runs inside a `READ ONLY` transaction so a
-  malformed or mistaken definition cannot mutate state. This is documented
-  at the `report` command and in `stack-backend.md`, and is the pre-empted
-  answer to the security review's inevitable question.
+- **`metric report` boundary (amended after PR #5 security review).** The
+  stored `definition` is operator-authored SQL (written via `metric define`),
+  but it is executed verbatim, so it is treated as adversarial. A READ ONLY
+  transaction alone is **insufficient** — it is a transaction attribute the
+  stored SQL can revert with its own `COMMIT; BEGIN READ WRITE; …` when
+  psycopg runs a multi-statement string. The boundary is four layered
+  controls, the first of which is the real one:
+  1. **Least-privilege role (primary).** A NOLOGIN `emctl_report_ro` role
+     with only `USAGE` + `SELECT` (and default privileges for future tables),
+     provisioned by `emctl migrate`. The report path `SET ROLE`s to it before
+     executing the definition, so no write privilege exists regardless of
+     transaction gymnastics. NOLOGIN + `SET ROLE` deliberately introduces no
+     new credentials.
+  2. **Single-statement only.** The definition runs on the extended query
+     protocol (empty params), which rejects `;`-chained statements — killing
+     the transaction-control escape at the source.
+  3. **READ ONLY transaction** — retained as a second layer.
+  4. **Define-time validation** — reject non-single-statement / non-`SELECT`
+     definitions at `metric define` as a fast-fail, not the boundary.
+  Documented in `stack-backend.md`; supersedes the earlier "READ ONLY tx is
+  the guard" decision (§11).
 
 ## 7. Migrations (Alembic — Tyler's call)
 
@@ -176,8 +191,12 @@ id → `NotFoundError` (exit 3), never a silent no-op.
   - `run start`→`finish` sets `ended_at`, `outcome`, costs;
   - `pr` `--summary-file` and `review` `--findings-file` ingest file
     contents; malformed `findings` JSON → `ValidationError`;
-  - `metric report` runs a stored query and **rejects a mutating
-    definition** (READ ONLY enforced);
+  - `metric report`: a legitimate multi-row `SELECT` returns rows; and the
+    write-escape suite **fails with zero state change** — the review's PoC
+    (`COMMIT; BEGIN READ WRITE; INSERT …; COMMIT; BEGIN;`), a single-statement
+    CTE write, and direct `INSERT`/`DELETE`/`TRUNCATE`/`DROP` definitions are
+    all rejected; `emctl_report_ro` exists post-migrate and lacks write
+    privilege;
   - `debt merge` bumps `recurrence` and resolves dups with a pointer;
   - `status` aggregates correctly on seeded data;
   - `--json` output parses and is stable; error paths emit clean messages
@@ -215,6 +234,13 @@ backfills them immediately after merge:
   `prd_ref=docs/prd/emctl.md`, status tracked through the vocabulary.
 - `runs` rows: the implementer run and each reviewer run.
 - `decisions` rows: (a) migrations-as-operative-truth over `db/schema.sql`;
-  (b) `metric report` runs in a READ ONLY transaction;
+  (b) **superseded** — `metric report`'s boundary is a least-privilege
+  read-only role + single-statement + READ ONLY tx + define-time validation
+  (the READ ONLY-tx-alone decision was falsified by the PR #5 security review);
   (c) `--version` deferred as the phase-2 canary.
-- `prs` + `reviews` rows once the PR opens and reviews land.
+- `prs` + `reviews` rows once the PR opens and reviews land (security round 1:
+  `block`; the finding drove this amendment and rework round 1).
+- `learnings` row (`start`): pressure-test security `[EM call]`s against the
+  actual DB mechanism before asserting them as safety guarantees in a spec —
+  the READ ONLY-tx guarantee was escapable and cost a review round (evidence:
+  PR #5 security round 1).
