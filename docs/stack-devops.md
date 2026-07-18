@@ -42,6 +42,45 @@ system and are treated as drift.
 
 **Docs publishing: MkDocs → GitHub Pages.** No cloud dependency.
 
+## Compute and billing — dual-path (while Tyler is the sole user)
+
+The platform runs on Tyler's Claude **subscription**, not API billing, for as
+long as he is the only user. This determines where each layer runs:
+
+- **Model compute stays local, on the subscription.** The EM and every
+  dispatched agent run in Tyler's local Claude Code / Agent SDK session under
+  his own login (OAuth profile). **Nothing deployed to the cloud ever calls
+  Claude** — that is the line that keeps us off API billing.
+- **State is the integration seam.** The Postgres store (local now, Cloud SQL
+  at Phase 3) is what the local agent and any deployed surface share. Because
+  the agent and the UI both talk to the *database*, not to each other, they
+  deploy independently.
+- **The UI deploys; it does not compute.** A deployed UI (Cloud Run) is a
+  dashboard + async intake queue over the state store: it reads/writes rows,
+  makes **no model calls**, and needs no API key. Tyler drops intent through
+  it as a row; the local EM picks it up and does the work on the subscription.
+
+**What would force API billing (deferred until Tyler decides, informed by
+measured cost):**
+- **Unattended cloud automation** — e.g. a PR auto-reviewed with no local
+  session running — needs a model call in CI. Deferred; the interactive local
+  loop covers a solo user.
+- **Cloud-side synchronous chat** — real-time chat handled server-side is a
+  model call in the cloud. On the subscription, synchronous chat stays local
+  (in Claude Code); the deployed UI is async.
+
+**Cost before commitment.** Every agent run records its token cost in `runs`;
+the `hypothetical_api_cost` metric projects what the API-billed path would
+cost from that ledger. *Accurate* projection needs token usage recorded **by
+type** — input, output, and cache tokens are priced very differently (output
+is ~5× input on Opus) — so until `runs` captures that split the metric reports
+a cost *range*, not a point. Build on the subscription, watch the ledger,
+price the API path from real usage before adopting it.
+
+Note: mechanical CI (tests, lint, type-check on a PR) runs **no** Claude calls,
+so it is compatible with the subscription model and can be adopted
+independently of the API-billing question.
+
 ## Terraform discipline
 
 - Remote state in a GCS bucket with versioning; nobody edits state by hand.
