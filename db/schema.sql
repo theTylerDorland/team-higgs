@@ -1,6 +1,14 @@
 -- Agent platform state store, schema v1.
+--
+-- REFERENCE ONLY. As of emctl task 1, the operative schema truth is the
+-- Alembic migration set under emctl/migrations/ (0001 faithfully
+-- reproduces this file). `emctl migrate` applies those migrations; this
+-- file is no longer applied to any database (the docker-compose init mount
+-- was removed to avoid colliding with Alembic). Change the schema by adding
+-- a migration, then update this reference to match.
+--
 -- Postgres. CHECK constraints instead of enums for cheap evolution;
--- promote to types if churn settles. Applied by emctl migrate (task 1).
+-- promote to types if churn settles.
 
 CREATE TABLE projects (
     id          SERIAL PRIMARY KEY,

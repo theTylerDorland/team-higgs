@@ -1,0 +1,59 @@
+[project]
+name = "emctl"
+version = "0.1.0"
+description = "Platform state CLI for the agent engineering team."
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12,<0.16",
+    "psycopg[binary]>=3.2,<4",
+    # Alembic drives migrations; it depends on SQLAlchemy, which env.py uses
+    # directly to build a psycopg3 engine for the `migrate` command.
+    "alembic>=1.13,<2",
+    "sqlalchemy>=2.0,<3",
+]
+
+[project.scripts]
+emctl = "emctl.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pytest>=8.2",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["emctl*"]
+
+[tool.setuptools.package-data]
+emctl = ["migrations/*.py", "migrations/versions/*.py", "migrations/*.mako"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# UP042: keep `(str, Enum)` mixin enums — Typer renders their choices as the
+# bare value; migrating to enum.StrEnum is a deferred cosmetic change.
+ignore = ["UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Option/Argument in argument defaults is the framework's idiom.
+"emctl/commands/*" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# Third-party packages without bundled type info.
+[[tool.mypy.overrides]]
+module = ["alembic.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

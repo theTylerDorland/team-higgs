@@ -9,7 +9,10 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      # Schema is applied by `emctl migrate` (Alembic), not by an init mount.
+      # Migrations under emctl/migrations/ are the operative schema truth;
+      # db/schema.sql is a reference only. Local bring-up is:
+      #   docker compose up -d db && emctl migrate
 
 volumes:
   pgdata:
