@@ -50,15 +50,42 @@ others.
 
 ## `metric report` trust boundary
 
-`metric report` executes the stored `definition` of a metric. That definition
-is operator-authored SQL, written by the EM via `metric define` — it is trusted
-input, not external data. It is nonetheless run inside a **READ ONLY**
-transaction (`emctl/db.py` `transaction(read_only=True)`), so a mistaken or
-malformed definition can only ever read: an attempted write raises and is
-mapped to an error, and state is unchanged. A test asserts a mutating
-definition is rejected and writes nothing. This is the pre-empted answer to the
-security review: the boundary is defence-in-depth around trusted-but-fallible
-operator SQL, not a sandbox for untrusted input.
+`metric report` executes the stored `definition` of a metric — operator-authored
+SQL written by the EM via `metric define`. It is trusted input, not external
+data, but it is treated as fallible and constrained by **four layers**, in
+order of importance:
+
+1. **Least-privilege role (the boundary).** Migration `0002` provisions a
+   NOLOGIN role `emctl_report_ro` with `USAGE` on the schema and `SELECT` on all
+   app tables (plus `ALTER DEFAULT PRIVILEGES ... GRANT SELECT` so future tables
+   are covered) and **no** write/DDL privilege. The report path issues
+   `SET LOCAL ROLE emctl_report_ro` before executing the definition, so the
+   definition runs with no ability to write. NOLOGIN + `SET ROLE` is used
+   deliberately: no new DSN, credential, or secret.
+2. **Single statement.** The definition runs as a prepared statement
+   (`conn.execute(definition, prepare=True)` → the extended query protocol),
+   whose Parse phase rejects `;`-separated multi-statement input. This is
+   load-bearing, not cosmetic: a `COMMIT` inside a multi-statement definition
+   would end the transaction and discard `SET LOCAL ROLE`, reverting to the
+   privileged session role — the exact `COMMIT; BEGIN READ WRITE; INSERT …;`
+   escape a security review found. Blocking multi-statement is what keeps the
+   role boundary intact. (Passing an empty params sequence does **not** force
+   the extended protocol in psycopg 3; `prepare=True` does.)
+3. **READ ONLY transaction.** `transaction(read_only=True)` (`emctl/db.py`) is a
+   second guard against single-statement writes.
+4. **Define-time validation.** `metric define`/`update` reject a definition that
+   is not a single `SELECT`/`WITH` statement — fast-fail UX with a clear message,
+   explicitly **not** the boundary (a read-only CTE is allowed at define time; a
+   CTE that writes is stopped at report time by the role).
+
+Tests seed hostile definitions directly into the table (bypassing define-time
+validation) and assert the report path rejects the reviewer's exact PoC, a
+CTE-write, and direct `INSERT`/`DELETE`/`TRUNCATE`/`DROP` — each with **zero**
+state change — and that `emctl_report_ro` exists after `migrate` and cannot
+write even in a writable transaction. The role is cluster-global; grants are
+per-database and are (re)applied wherever `emctl migrate` runs. `0002`'s
+downgrade revokes this database's grants but does not drop the role (a
+cluster object other databases may depend on).
 
 ## Migrations are the operative schema truth
 

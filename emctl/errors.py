@@ -78,5 +78,9 @@ def map_db_errors() -> Iterator[None]:
         raise EmctlError(
             "metric definition attempted to write inside a READ ONLY transaction"
         ) from exc
+    except psycopg.errors.InsufficientPrivilege as exc:
+        raise EmctlError(
+            "metric definition attempted a write or privileged operation"
+        ) from exc
     except psycopg.Error as exc:
         raise EmctlError("database error") from exc
