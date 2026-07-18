@@ -74,17 +74,25 @@ emctl migrate
 - **`task create`** — `--title` **(required)**, `--project` **(required,
   project id)**, `--spec`, `--role`, `--tier` (`plan`, `execute`,
   `local`), `--prd-ref`, `--status`, `--branch`, `--depends-on` (a task id;
-  repeat the option for several).
+  repeat the option for several), `--by` (the role making the change,
+  recorded in the task's history).
 - **`task update <id>`** — `--status`, `--role`, `--tier`, `--prd-ref`,
   `--branch`, `--depends-on` (repeatable), `--blocked-reason` (marks the
-  task blocked and records why), `--unblock` (clears the block).
+  task blocked and records why), `--unblock` (clears the block), `--by`
+  (the role making the change, recorded in the task's history).
   `--blocked-reason` and `--unblock` cannot be used together.
+- **`task history <id>`** — list the task's status changes in order, each
+  showing the status it moved from and to, the role that made the change,
+  and when.
 - **`task show <id>`**.
 - **`task list`** — filter with `--status`, `--project`, `--role`,
   `--blocked`.
 
 Task status values: `backlog`, `planned`, `in_progress`, `in_review`,
 `awaiting_tyler`, `done`.
+
+Each status change is recorded in the task's history; `--by` notes which
+role made it. See **`task history`** to read the timeline back.
 
 ## `run`
 
@@ -102,9 +110,9 @@ Task status values: `backlog`, `planned`, `in_progress`, `in_review`,
 - **`pr open`** — `--project` **(required, project id)**, `--github-pr`
   **(required)**, `--risk` (`low`, `medium`, `high`), `--summary-file` (a
   file whose contents become the summary), `--status` (`open`, `merged`,
-  `rejected`, `closed`).
+  `rejected`, `closed`), `--task` (the id of the task this PR implements).
 - **`pr update <id>`** — `--status`, `--risk`, `--summary-file`,
-  `--decision`.
+  `--decision`, `--task` (the id of the task this PR implements).
 - **`pr show <id>`**.
 
 ## `review`
@@ -135,8 +143,18 @@ Task status values: `backlog`, `planned`, `in_progress`, `in_review`,
 ## `decision`
 
 - **`decision add`** — `--title` **(required)**, `--decision`
-  **(required)**, `--project` (project id), `--context`.
-- **`decision list`** — `--project` to filter.
+  **(required)**, `--project` (project id), `--context`, `--significance`
+  (`major`, `minor`; default `major`), `--status` (`proposed`, `accepted`,
+  `superseded`, `reversed`).
+- **`decision supersede <old-id>`** — `--by` **(required, the id of the
+  decision that replaces it)**. Marks the old decision superseded and
+  records which decision replaced it.
+- **`decision list`** — filter with `--project`, `--significance`,
+  `--status`.
+
+Decision status values: `proposed`, `accepted`, `superseded`, `reversed`.
+Significance is `major` or `minor` — mark routine choices `minor` to keep
+them separate from the headline decisions.
 
 ## `metric`
 
@@ -175,6 +193,28 @@ Task status values: `backlog`, `planned`, `in_progress`, `in_review`,
 - **`debt list`** — filter with `--status` (`open`, `proposed`,
   `resolved`, `stale`, `escalated`), `--severity`, `--kind`.
 
+## `risk`
+
+The risk register records risks on a project — what they are, how serious
+they are, and how they were addressed.
+
+- **`risk add`** — `--project` **(required, project id)**, `--title`
+  **(required)**, `--category` **(required)** (`security`, `architecture`,
+  `operational`, `cost`, `dependency`, `product`), `--severity`
+  **(required)** (`high`, `medium`, `low`), `--body` (a description),
+  `--status` (`acknowledged`, `mitigated`, `accepted`, `realized`,
+  `closed`; default `acknowledged`), `--mitigation` (how it was addressed,
+  or why it is accepted), `--decision` (the id of a related decision),
+  `--pr` (the id of a related PR), `--by` (the role acknowledging it).
+- **`risk update <id>`** — `--status`, `--severity`, `--mitigation`,
+  `--decision` (the id of a related decision).
+- **`risk list`** — filter with `--project`, `--status`, `--category`,
+  `--severity`.
+- **`risk show <id>`** — the full risk, with its linked decision and PR.
+
+Risk status values: `acknowledged`, `mitigated`, `accepted`, `realized`,
+`closed`.
+
 ## `retro`
 
 - **`retro open`** — `--trigger` **(required)**, `--doc-path`.
@@ -196,4 +236,3 @@ outcome:
 | 3 | Not found (the id or name you referenced does not exist) |
 | 4 | Conflict (a uniqueness or reference rule was violated, e.g. a duplicate project name) |
 | 5 | Configuration error (`DATABASE_URL` is not set) |
-</content>
