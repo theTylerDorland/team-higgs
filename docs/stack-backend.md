@@ -116,6 +116,42 @@ Two schema sources drift, so migrations win over `db/schema.sql`:
   `emctl/migrations/`. Change the schema by adding a migration, then update the
   reference to match.
 
+## Observability surface (schema v2, migration `0003`)
+
+`0003` is additive and reversible (PRD `docs/prd/observability.md`). It adds two
+tables — `risks` (EM-curated register, FKs to projects/decisions/prs) and
+`task_events` (task status history, FK to tasks) — and three columns
+(`decisions.status`/`significance`/`superseded_by`, `prs.task_id`). New columns
+are nullable or carry `NOT NULL DEFAULT` values, so existing rows validate
+without a data migration; `downgrade()` drops the additions in FK-safe order and
+is round-trip tested (`tests/test_migrate.py`).
+
+- **Generic backfill only.** `0003` seeds one synthetic `task_events` row per
+  pre-existing task (`to_status` = current status, `actor='backfill'`) so
+  cycle-time queries have a terminal event to anchor on. It hard-codes no ids
+  and is a no-op on a fresh database. Platform-specific backfill (linking a
+  specific PR to a task, seeding named risks) is an EM post-merge pass, not the
+  migration's job.
+- **`emctl_report_ro` reads the new tables** through `0002`'s
+  `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES`: the v2 tables are
+  created by the same migrating role, so the default grant covers them. A test
+  drives `metric report` (which `SET LOCAL ROLE emctl_report_ro`) against
+  `risks`/`task_events` to prove it.
+
+New commands follow the existing three-layer pattern (`commands/` → `repo/` →
+`db`), parameterized SQL only, global `--json`, same exit-code contract:
+`risk add|update|list|show`; `decision supersede` and `decision add`/`list`
+gaining `--significance`/`--status`; `pr open|update --task`; and `task
+create`/`update` writing a `task_events` row on status change (with an optional
+`--by <role>` actor), read back by `task history <id>`. `risk update` and `risk
+add` stamp `resolved_at` when `status` is anything other than `acknowledged`.
+
+**Metrics remain data.** The three now-computable metrics (`cost_per_merged_pr`,
+`cycle_time_days`, `rework_rate`) are registered by the EM post-merge via
+`metric define`; they run on the unchanged `metric report` read-only boundary
+(above). `tests/test_observability_metrics.py` proves each SQL runs and returns
+rows through that path, but registers nothing.
+
 ## Testing
 
 pytest against real Postgres (no mock DB). `conftest.py` points the app at

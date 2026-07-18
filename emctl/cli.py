@@ -22,6 +22,7 @@ from emctl.commands import (
     question,
     retro,
     review,
+    risk,
     run,
     status,
     task,
@@ -51,6 +52,7 @@ app.add_typer(review.app, name="review")
 app.add_typer(artifact.app, name="artifact")
 app.add_typer(question.app, name="question")
 app.add_typer(decision.app, name="decision")
+app.add_typer(risk.app, name="risk")
 app.add_typer(metric.app, name="metric")
 app.add_typer(learning.app, name="learning")
 app.add_typer(debt.app, name="debt")

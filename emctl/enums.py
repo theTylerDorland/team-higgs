@@ -60,6 +60,35 @@ class RiskLevel(str, Enum):
     high = "high"
 
 
+class DecisionStatus(str, Enum):
+    proposed = "proposed"
+    accepted = "accepted"
+    superseded = "superseded"
+    reversed = "reversed"
+
+
+class DecisionSignificance(str, Enum):
+    major = "major"
+    minor = "minor"
+
+
+class RiskCategory(str, Enum):
+    security = "security"
+    architecture = "architecture"
+    operational = "operational"
+    cost = "cost"
+    dependency = "dependency"
+    product = "product"
+
+
+class RiskStatus(str, Enum):
+    acknowledged = "acknowledged"
+    mitigated = "mitigated"
+    accepted = "accepted"
+    realized = "realized"
+    closed = "closed"
+
+
 class Verdict(str, Enum):
     approve = "approve"
     concerns = "concerns"

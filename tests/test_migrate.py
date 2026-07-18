@@ -23,6 +23,8 @@ EXPECTED_TABLES = {
     "debt",
     "metrics",
     "retros",
+    "risks",
+    "task_events",
 }
 EXPECTED_INDEXES = {
     "idx_tasks_status",
@@ -30,6 +32,8 @@ EXPECTED_INDEXES = {
     "idx_reviews_pr",
     "idx_debt_open",
     "idx_learnings_open",
+    "idx_risks_open",
+    "idx_task_events_task",
 }
 
 
@@ -92,3 +96,68 @@ def test_partial_index_predicate() -> None:
         ).fetchall()
     assert rows
     assert "WHERE (status <> 'done'" in rows[0][0]
+
+
+def _columns(conn: psycopg.Connection, table: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = %s",
+        (table,),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def test_0003_single_step_round_trips() -> None:
+    """0003's own downgrade/upgrade: the v2 tables and columns disappear at
+    0002 and return at head. Restores head so later tests see the full schema."""
+    cfg = make_config()
+    command.downgrade(cfg, "0002")
+    with _conn() as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            ).fetchall()
+        }
+        decision_cols = _columns(conn, "decisions")
+        pr_cols = _columns(conn, "prs")
+    assert "risks" not in tables
+    assert "task_events" not in tables
+    assert {"status", "significance", "superseded_by"} & decision_cols == set()
+    assert "task_id" not in pr_cols
+
+    command.upgrade(cfg, "head")
+    with _conn() as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+            ).fetchall()
+        }
+        decision_cols = _columns(conn, "decisions")
+        pr_cols = _columns(conn, "prs")
+    assert {"risks", "task_events"} <= tables
+    assert {"status", "significance", "superseded_by"} <= decision_cols
+    assert "task_id" in pr_cols
+
+
+def test_0003_backfill_seeds_synthetic_task_event() -> None:
+    """The generic backfill seeds one `actor='backfill'` event per pre-existing
+    task on upgrade — no hard-coded ids. Restores head at the end."""
+    cfg = make_config()
+    command.downgrade(cfg, "0002")  # drops task_events
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO projects (name, repo) VALUES ('bf', 'r')"
+        )
+        conn.execute(
+            "INSERT INTO tasks (project_id, title, status) "
+            "SELECT id, 'pre-existing', 'in_review' FROM projects WHERE name = 'bf'"
+        )
+        conn.commit()
+    command.upgrade(cfg, "head")  # runs the backfill INSERT ... SELECT
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT to_status, from_status, actor FROM task_events"
+        ).fetchall()
+    assert rows == [("in_review", None, "backfill")]

@@ -1,11 +1,12 @@
--- Agent platform state store, schema v1.
+-- Agent platform state store, schema v2 (through migration 0003).
 --
 -- REFERENCE ONLY. As of emctl task 1, the operative schema truth is the
--- Alembic migration set under emctl/migrations/ (0001 faithfully
--- reproduces this file). `emctl migrate` applies those migrations; this
--- file is no longer applied to any database (the docker-compose init mount
--- was removed to avoid colliding with Alembic). Change the schema by adding
--- a migration, then update this reference to match.
+-- Alembic migration set under emctl/migrations/ (0001 reproduces the v1
+-- baseline; 0003 adds the observability v2 surface reflected here).
+-- `emctl migrate` applies those migrations; this file is no longer applied
+-- to any database (the docker-compose init mount was removed to avoid
+-- colliding with Alembic). Change the schema by adding a migration, then
+-- update this reference to match.
 --
 -- Postgres. CHECK constraints instead of enums for cheap evolution;
 -- promote to types if churn settles.
@@ -66,6 +67,7 @@ CREATE TABLE prs (
     em_summary     TEXT,          -- the full synthesized report
     tyler_decision TEXT,
     decided_at     TIMESTAMPTZ,
+    task_id        INT REFERENCES tasks(id),  -- schema v2 (0003): task this PR implements
     UNIQUE (project_id, github_pr)
 );
 
@@ -93,12 +95,18 @@ CREATE TABLE questions (
 );
 
 CREATE TABLE decisions (
-    id          SERIAL PRIMARY KEY,
-    project_id  INT REFERENCES projects(id),
-    title       TEXT NOT NULL,
-    context     TEXT,
-    decision    TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id            SERIAL PRIMARY KEY,
+    project_id    INT REFERENCES projects(id),
+    title         TEXT NOT NULL,
+    context       TEXT,
+    decision      TEXT NOT NULL,
+    -- schema v2 (migration 0003): status/significance/supersession link.
+    status        TEXT NOT NULL DEFAULT 'accepted'
+                  CHECK (status IN ('proposed','accepted','superseded','reversed')),
+    significance  TEXT NOT NULL DEFAULT 'major'
+                  CHECK (significance IN ('major','minor')),
+    superseded_by INT REFERENCES decisions(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE artifacts (
@@ -166,8 +174,40 @@ CREATE TABLE retros (
     closed_at   TIMESTAMPTZ
 );
 
+-- schema v2 (migration 0003): EM-curated risk register.
+CREATE TABLE risks (
+    id              SERIAL PRIMARY KEY,
+    project_id      INT NOT NULL REFERENCES projects(id),
+    title           TEXT NOT NULL,
+    body            TEXT,
+    category        TEXT NOT NULL CHECK (category IN ('security','architecture',
+                                    'operational','cost','dependency','product')),
+    severity        TEXT NOT NULL CHECK (severity IN ('high','medium','low')),
+    status          TEXT NOT NULL DEFAULT 'acknowledged'
+                    CHECK (status IN ('acknowledged','mitigated','accepted',
+                                      'realized','closed')),
+    mitigation      TEXT,
+    decision_id     INT REFERENCES decisions(id),
+    pr_id           INT REFERENCES prs(id),
+    acknowledged_by TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at     TIMESTAMPTZ      -- set when status leaves 'acknowledged'
+);
+
+-- schema v2 (migration 0003): task status history for cycle-time / rework.
+CREATE TABLE task_events (
+    id          SERIAL PRIMARY KEY,
+    task_id     INT NOT NULL REFERENCES tasks(id),
+    from_status TEXT,                -- null on creation
+    to_status   TEXT NOT NULL,
+    actor       TEXT,                -- role that made the change
+    at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX idx_tasks_status   ON tasks(status) WHERE status != 'done';
 CREATE INDEX idx_runs_task      ON runs(task_id);
 CREATE INDEX idx_reviews_pr     ON reviews(pr_id);
 CREATE INDEX idx_debt_open      ON debt(status) WHERE status = 'open';
 CREATE INDEX idx_learnings_open ON learnings(status) WHERE status = 'open';
+CREATE INDEX idx_risks_open       ON risks(status) WHERE status = 'acknowledged';
+CREATE INDEX idx_task_events_task ON task_events(task_id);

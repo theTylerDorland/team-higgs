@@ -20,6 +20,7 @@ def open_(
     risk: RiskLevel | None = typer.Option(None, "--risk"),
     summary_file: Path | None = typer.Option(None, "--summary-file"),
     status: PrStatus | None = typer.Option(None, "--status"),
+    task: int | None = typer.Option(None, "--task", help="Task id this PR implements."),
 ) -> None:
     em_summary = read_text_file(summary_file) if summary_file else None
     with transaction() as conn:
@@ -30,6 +31,7 @@ def open_(
             risk_level=risk.value if risk else None,
             em_summary=em_summary,
             status=status.value if status else None,
+            task_id=task,
         )
     output.emit_record(row)
 
@@ -41,6 +43,7 @@ def update(
     risk: RiskLevel | None = typer.Option(None, "--risk"),
     summary_file: Path | None = typer.Option(None, "--summary-file"),
     decision: str | None = typer.Option(None, "--decision"),
+    task: int | None = typer.Option(None, "--task", help="Task id this PR implements."),
 ) -> None:
     em_summary = read_text_file(summary_file) if summary_file else None
     with transaction() as conn:
@@ -51,6 +54,7 @@ def update(
             risk_level=risk.value if risk else None,
             em_summary=em_summary,
             tyler_decision=decision,
+            task_id=task,
         )
     output.emit_record(row)
 

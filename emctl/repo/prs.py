@@ -20,6 +20,7 @@ def open_(
     risk_level: str | None,
     em_summary: str | None,
     status: str | None,
+    task_id: int | None,
 ) -> Row:
     values: dict[str, Any] = {"project_id": project_id, "github_pr": github_pr}
     if risk_level is not None:
@@ -28,6 +29,8 @@ def open_(
         values["em_summary"] = em_summary
     if status is not None:
         values["status"] = status
+    if task_id is not None:
+        values["task_id"] = task_id
     return _sql.insert(conn, "prs", values)
 
 
@@ -43,6 +46,7 @@ def update(
     risk_level: str | None,
     em_summary: str | None,
     tyler_decision: str | None,
+    task_id: int | None,
 ) -> Row:
     values: dict[str, Any] = {}
     if status is not None:
@@ -51,6 +55,8 @@ def update(
         values["risk_level"] = risk_level
     if em_summary is not None:
         values["em_summary"] = em_summary
+    if task_id is not None:
+        values["task_id"] = task_id
     extra: list[Any] = []
     if tyler_decision is not None:
         values["tyler_decision"] = tyler_decision

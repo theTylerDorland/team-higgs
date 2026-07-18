@@ -41,6 +41,8 @@ TABLES = [
     "debt",
     "metrics",
     "retros",
+    "risks",
+    "task_events",
 ]
 
 

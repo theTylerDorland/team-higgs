@@ -154,3 +154,67 @@ def test_report_ro_role_exists_and_lacks_write() -> None:
 def test_report_unknown_metric_is_not_found(invoke) -> None:  # type: ignore[no-untyped-def]
     result, _ = invoke("metric", "report", "--name", "does-not-exist")
     assert result.exit_code == 3
+
+
+# --- report-time boundary pins the schema-v2 tables -----------------------
+# The existing hostile-write tests target `retros`; these repeat the same
+# three attack shapes against the new `risks` / `task_events` tables. Each
+# payload is written with valid FK values (via `SELECT ... FROM <parent>`) so
+# it *would* write absent the boundary — meaning this regression fails if
+# anyone ever reopens READ ONLY or grants the report role write access to the
+# new tables. The `DO`-block payload defeats SET LOCAL ROLE and prepare=True,
+# so only the READ ONLY transaction stops it.
+_RISKS_INSERT = (
+    "INSERT INTO risks (project_id, title, category, severity) "
+    "SELECT id, 't', 'security', 'high' FROM projects LIMIT 1"
+)
+_EVENTS_INSERT = (
+    "INSERT INTO task_events (task_id, to_status) "
+    "SELECT id, 'in_review' FROM tasks LIMIT 1"
+)
+NEW_TABLE_WRITE_PAYLOADS = [
+    ("risks_insert", _RISKS_INSERT, "risks"),
+    (
+        "risks_cte",
+        f"WITH x AS ({_RISKS_INSERT} RETURNING *) SELECT * FROM x",
+        "risks",
+    ),
+    (
+        "risks_do_reset_role",
+        "DO $$ BEGIN RESET ROLE; EXECUTE 'INSERT INTO risks "
+        "(project_id, title, category, severity) SELECT id, ''t'', ''security'', "
+        "''high'' FROM projects LIMIT 1'; END $$",
+        "risks",
+    ),
+    ("events_insert", _EVENTS_INSERT, "task_events"),
+    (
+        "events_cte",
+        f"WITH x AS ({_EVENTS_INSERT} RETURNING *) SELECT * FROM x",
+        "task_events",
+    ),
+    (
+        "events_do_reset_role",
+        "DO $$ BEGIN RESET ROLE; EXECUTE 'INSERT INTO task_events "
+        "(task_id, to_status) SELECT id, ''in_review'' FROM tasks LIMIT 1'; END $$",
+        "task_events",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,definition,table",
+    NEW_TABLE_WRITE_PAYLOADS,
+    ids=[p[0] for p in NEW_TABLE_WRITE_PAYLOADS],
+)
+def test_report_blocks_hostile_writes_to_new_tables(  # type: ignore[no-untyped-def]
+    invoke, label, definition, table
+) -> None:
+    # A real project + task so the payloads reference valid FKs (and so the
+    # legitimate task_events opening row is accounted for below).
+    _, project = invoke("project", "create", "--name", "p", "--repo", "r")
+    invoke("task", "create", "--title", "t", "--project", str(project["id"]))
+    before = _count(table)  # 0 for risks; 1 for task_events (the opening event)
+    _seed_metric(label, definition)
+    result, _ = invoke("metric", "report", "--name", label)
+    assert result.exit_code != 0
+    assert _count(table) == before  # the hostile payload wrote nothing

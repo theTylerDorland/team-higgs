@@ -80,3 +80,28 @@ def test_pr_update_decision_sets_decided_at(invoke, project_id) -> None:  # type
     assert updated["status"] == "merged"
     assert updated["tyler_decision"] == "merge it"
     assert updated["decided_at"] is not None
+
+
+def test_pr_open_links_task(invoke, project_id) -> None:  # type: ignore[no-untyped-def]
+    _, task = invoke("task", "create", "--title", "t", "--project", str(project_id))
+    _, pr = invoke(
+        "pr", "open", "--project", str(project_id), "--github-pr", "13",
+        "--task", str(task["id"]),
+    )
+    assert pr["task_id"] == task["id"]
+
+
+def test_pr_update_links_task(invoke, project_id) -> None:  # type: ignore[no-untyped-def]
+    _, task = invoke("task", "create", "--title", "t", "--project", str(project_id))
+    _, pr = invoke("pr", "open", "--project", str(project_id), "--github-pr", "14")
+    assert pr["task_id"] is None
+    _, updated = invoke("pr", "update", str(pr["id"]), "--task", str(task["id"]))
+    assert updated["task_id"] == task["id"]
+
+
+def test_pr_open_unknown_task_is_conflict(invoke, project_id) -> None:  # type: ignore[no-untyped-def]
+    result, _ = invoke(
+        "pr", "open", "--project", str(project_id),
+        "--github-pr", "15", "--task", "9999",
+    )
+    assert result.exit_code == 4
