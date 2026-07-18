@@ -23,6 +23,13 @@ CTE_WRITE = (
     "WITH x AS (INSERT INTO retros(trigger) VALUES ('cte') RETURNING *) "
     "SELECT * FROM x"
 )
+# One top-level statement that bypasses SET LOCAL ROLE (RESET ROLE returns to
+# session_user) and prepare=True (Parse never sees the inner EXECUTE). Only the
+# READ ONLY transaction stops it — this payload pins that control.
+DO_BLOCK_RESET_ROLE = (
+    "DO $$ BEGIN RESET ROLE; "
+    "EXECUTE 'INSERT INTO retros(trigger) VALUES (''x'')'; END $$"
+)
 
 
 def _seed_metric(name: str, definition: str) -> None:
@@ -99,6 +106,16 @@ def test_report_rejects_cte_write(invoke) -> None:  # type: ignore[no-untyped-de
     result, _ = invoke("metric", "report", "--name", "cte")
     assert result.exit_code != 0
     assert _count("retros") == 0
+
+
+def test_report_read_only_blocks_do_block_reset_role(invoke) -> None:  # type: ignore[no-untyped-def]
+    """Pin the load-bearing control: the production report path is READ ONLY,
+    which blocks a DO-block payload that defeats SET LOCAL ROLE and prepare=True.
+    This fails if anyone removes read_only=True from the report transaction."""
+    _seed_metric("doblock", DO_BLOCK_RESET_ROLE)
+    result, _ = invoke("metric", "report", "--name", "doblock")
+    assert result.exit_code != 0
+    assert _count("retros") == 0  # READ ONLY prevented the write
 
 
 @pytest.mark.parametrize(

@@ -2,23 +2,27 @@
 
 ``report`` executes an operator-authored SQL definition. That definition is
 authored by the EM via ``metric define`` — trusted input, not external data —
-but the report path treats it as fallible and applies layered controls so it
-can only ever read:
+but the report path treats it as fallible and applies layered controls, in this
+order of importance:
 
-1. **Least-privilege role (primary boundary).** ``SET LOCAL ROLE
-   emctl_report_ro`` (provisioned by migration 0002) drops all write privilege
-   before the definition runs; a write/DDL attempt fails with
-   insufficient_privilege.
-2. **Single statement.** The definition is executed as a prepared statement
-   (``prepare=True`` → the extended query protocol), whose Parse phase rejects
-   ``;``-separated multi-statement input. This is essential, not cosmetic: a
-   ``COMMIT`` inside a multi-statement definition would end the transaction and
-   discard ``SET LOCAL ROLE``, so blocking multi-statement is what keeps the
-   role boundary intact against the ``COMMIT; BEGIN READ WRITE; ...`` escape.
-3. **READ ONLY transaction.** Opened by the command layer as a second guard.
-4. **Define-time validation.** ``define``/``update`` reject a definition that
-   is not a single ``SELECT``/``WITH`` statement — fast-fail UX, not the
-   boundary.
+1. **READ ONLY transaction — the load-bearing, role-independent control.**
+   ``transaction(read_only=True)`` (``emctl/db.py``, opened in
+   ``commands/metric.py``) blocks *every* write, including writes performed
+   inside PL/pgSQL ``DO`` blocks and VOLATILE / SECURITY DEFINER functions.
+   This is the control that actually prevents mutation — do not remove it.
+2. **Define-time validation (single ``SELECT``/``WITH``).** ``define``/``update``
+   reject anything that is not a single read query, so multi-statement,
+   ``DO``-block, and non-read payloads never reach ``metrics.definition`` through
+   the CLI in the first place.
+3. **Supplementary hardening — not a boundary.** ``SET LOCAL ROLE
+   emctl_report_ro`` (migration 0002) plus prepared-statement execution
+   (``prepare=True`` → extended protocol, single statement only) stop accidental
+   and simple writes and raise the bar. They are **bypassable within a single
+   statement**: a ``DO $$ BEGIN RESET ROLE; EXECUTE 'INSERT ...'; END $$`` is one
+   top-level statement (so Parse never sees the inner write) and ``RESET ROLE``
+   returns to ``session_user`` (Postgres checks SET/RESET ROLE against
+   session_user, not the active role), restoring privilege. Only the READ ONLY
+   transaction stops that. See docs/stack-backend.md.
 """
 
 from __future__ import annotations
@@ -120,13 +124,15 @@ def list_(conn: Conn, *, status: str | None) -> list[Row]:
 def report(conn: Conn, *, name: str) -> list[Row]:
     """Run the stored definition and return its rows.
 
-    The caller opens the connection READ ONLY. Here we additionally drop to the
-    least-privilege ``emctl_report_ro`` role and run the definition as a
-    prepared statement so only a single, write-less statement can execute.
+    The caller MUST open the connection READ ONLY — that is the control that
+    actually prevents writes (see module docstring). The role drop and prepared
+    execution below are supplementary hardening, not the boundary.
     """
     metric = get_by_name(conn, name)  # read as the app role, before dropping down
     definition: str = metric["definition"]
-    # Primary boundary: no write privilege for the definition's execution.
+    # Supplementary hardening (NOT a boundary): SET LOCAL ROLE is bypassable
+    # within one statement via PL/pgSQL RESET ROLE; the READ ONLY tx is what
+    # holds. See docs/stack-backend.md.
     conn.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(REPORT_ROLE)))
     # prepare=True => extended protocol; the server rejects multi-statement input.
     cursor = conn.execute(definition, prepare=True)  # noqa: S608 - trusted, sandboxed

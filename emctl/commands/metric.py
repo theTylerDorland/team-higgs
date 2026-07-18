@@ -62,7 +62,10 @@ def list_(
 
 @app.command("report")
 def report(name: str = typer.Option(..., "--name")) -> None:
-    # READ ONLY: a mistaken or malformed definition can only read, never write.
+    # DO NOT REMOVE read_only=True. This READ ONLY transaction is the control
+    # that actually prevents a stored definition from writing (incl. inside
+    # PL/pgSQL DO blocks and functions). SET LOCAL ROLE is bypassable via
+    # PL/pgSQL RESET ROLE — see emctl/repo/metrics.py and docs/stack-backend.md.
     with transaction(read_only=True) as conn:
         rows = metrics.report(conn, name=name)
     output.emit_rows(rows)

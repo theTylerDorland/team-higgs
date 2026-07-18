@@ -31,6 +31,11 @@ def transaction(*, read_only: bool = False) -> Iterator[Conn]:
     conn: Conn = psycopg.connect(database_url(), row_factory=dict_row)
     try:
         if read_only:
+            # DO NOT REMOVE: for `metric report` this READ ONLY transaction is
+            # the load-bearing control that prevents a stored definition from
+            # writing (incl. inside PL/pgSQL DO blocks / functions). SET LOCAL
+            # ROLE in metrics.report is bypassable; this is not. See
+            # docs/stack-backend.md.
             conn.read_only = True
         with conn, map_db_errors():
             yield conn
