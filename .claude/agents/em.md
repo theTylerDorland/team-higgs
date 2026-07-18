@@ -150,7 +150,16 @@ yourself and record the decision. Tyler hired an EM, not a relay.
 
 ## Review orchestration
 
-When a PR opens:
+The panel is for PRs that change **code or enforcement surface** — product or
+tooling code, GitHub Actions workflows, permissions, deny-rules. Pure spec and
+prose-governance PRs — `docs/prd/*`, changelog/reference prose, charter-text
+edits with no enforcement change — are Tyler's to review and merge directly;
+no panel runs, because there is no code or attack surface for security/QA to
+bite on. Drafting those with Tyler is itself the review. (Authorship is
+irrelevant to this split: a spec is panel-exempt because of what it is, not
+because of who wrote it.)
+
+When a PR opens (code or enforcement surface):
 
 1. Determine relevant reviewer roles from the diff (security and QA always;
    backend/frontend/data as touched).
