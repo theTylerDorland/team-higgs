@@ -152,6 +152,41 @@ add` stamp `resolved_at` when `status` is anything other than `acknowledged`.
 (above). `tests/test_observability_metrics.py` proves each SQL runs and returns
 rows through that path, but registers nothing.
 
+## Token accounting by type (schema v2.1, migration `0004`)
+
+`0004` is additive and reversible (PRD `docs/prd/token-accounting.md`). It adds
+four nullable `BIGINT` columns to `runs` — `input_tokens`, `output_tokens`,
+`cache_read_tokens`, `cache_write_tokens`, each with a `col IS NULL OR col >= 0`
+CHECK — so per-run API token usage is recorded **by type** rather than as the
+single `token_cost` lump (which is
+≈ output tokens only). Measured cost is cache-dominated, so the lump under-counts
+badly; the typed columns supersede it for cost projection. `token_cost` is left
+untouched (legacy); `downgrade()` drops the four columns and is round-trip tested
+(`tests/test_migrate.py`). All columns default NULL, so existing rows and runs
+without a transcript validate without a data migration.
+
+- **emctl surface** (same `commands/` → `repo/` → `db` pattern, parameterized
+  SQL, global `--json`, unchanged exit-code contract): `run finish` gains
+  optional `--input-tokens --output-tokens --cache-read --cache-write`; a **new
+  `run update <RUN_ID>`** amends an already-finished run (correction /
+  historical backfill) with those four flags plus `--tokens --cost --outcome
+  --log-ref`. Unknown `RUN_ID` → `NotFoundError` (exit 3); a bad enum/value, or
+  a negative token count breaching the CHECK, → `ValidationError` (exit 2, the
+  repo's `CheckViolation` mapping). Only supplied flags are written, so an omitted
+  flag never nulls a stored value; `run update` does not touch `ended_at` (it is
+  not a finish).
+- **Transcript aggregator (out of emctl, deliberately).**
+  `tools/agent_token_split.py <transcript.jsonl>` sums the four token types from
+  a Claude Code agent transcript (`message.usage`) and surfaces `message.model`,
+  printing them as JSON. It is a pure read: one file opened read-only, tolerant
+  of malformed / `usage`-less lines (never raises on a bad transcript), writing
+  and executing nothing. Keeping it standalone isolates the Claude-Code
+  transcript coupling to one file — emctl stays format-agnostic and takes the
+  numbers via flags. The EM pipes its output into `run finish`/`run update`.
+- **Metric is out of scope here.** The EM reprices `hypothetical_api_cost` from
+  the typed columns post-merge via `metric define`, on the unchanged `metric
+  report` read-only boundary; this task registers no metric.
+
 ## Testing
 
 pytest against real Postgres (no mock DB). `conftest.py` points the app at

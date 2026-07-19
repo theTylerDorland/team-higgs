@@ -1,0 +1,7 @@
+{"type": "summary", "summary": "no usage on this line"}
+{ this is not valid json at all
+{"type": "assistant", "message": "message is a string, not an object"}
+[1, 2, 3]
+
+{"type": "assistant", "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4}}}
+{"type": "assistant", "message": {"usage": {"input_tokens": true, "output_tokens": "n/a"}}}
