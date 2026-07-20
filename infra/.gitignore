@@ -1,0 +1,11 @@
+# Local Terraform working state — never commit.
+# NB: .terraform.lock.hcl IS committed (pins provider versions/hashes).
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Real values (may contain project IDs / config) — commit only the *.example.
+terraform.tfvars
+backend.hcl
+*.auto.tfvars

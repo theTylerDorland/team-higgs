@@ -1,0 +1,8 @@
+# Partial backend config for the remote GCS state bucket.
+# Copy to backend.hcl (gitignored) and fill in the real bucket name, then:
+#   terraform init -backend-config=backend.hcl
+#
+# The bucket is a DAY-ZERO manual precondition: created by hand, with object
+# versioning enabled, before the first init. Terraform cannot create the bucket
+# that stores its own state.
+bucket = "REPLACE-WITH-PLATFORM-TF-STATE-BUCKET"
