@@ -35,13 +35,21 @@ resource "google_sql_database_instance" "platform" {
     }
 
     ip_configuration {
-      # No public IP and no authorized networks: the instance is reached only
-      # through the Cloud SQL connector socket that Cloud Run mounts. It is not
-      # exposed to the internet.
-      ipv4_enabled = false
-      # Private IP would require a VPC + Serverless VPC connector; deferred.
-      # With ipv4_enabled=false and no private network, connectivity is via the
-      # Cloud SQL Auth proxy/connector only (how Cloud Run's socket works).
+      # Public IP, but NO authorized_networks: every Cloud SQL instance must
+      # enable at least one connectivity method (Public IP, Private IP, or PSC),
+      # so a public IP is enabled to satisfy that API requirement. With zero
+      # authorized_networks, no arbitrary host on the internet can reach the
+      # instance directly. The only path in is the Cloud SQL Auth Proxy that
+      # Cloud Run mounts as a socket: it authenticates via IAM (the runtime SA
+      # holds roles/cloudsql.client) and tunnels over TLS. This is the standard
+      # Cloud Run -> Cloud SQL pattern. Private IP (VPC + Serverless VPC
+      # connector) is deliberately not used here; deferred.
+      ipv4_enabled = true
+
+      # Defense in depth: reject any unencrypted connection. ENCRYPTED_ONLY
+      # mandates TLS without requiring client certificates (the Auth Proxy
+      # already establishes TLS, so this does not break the Cloud Run socket).
+      ssl_mode = "ENCRYPTED_ONLY"
     }
   }
 
