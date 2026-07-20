@@ -18,6 +18,16 @@ output "runtime_service_account" {
   value       = google_service_account.plantlog_run.email
 }
 
+output "wif_provider_name" {
+  description = "Full resource name of the GitHub WIF provider; use as `workload_identity_provider` in google-github-actions/auth."
+  value       = google_iam_workload_identity_pool_provider.github.name
+}
+
+output "ci_service_account" {
+  description = "Email of the github-ci service account that CI impersonates via WIF; use as `service_account` in google-github-actions/auth."
+  value       = data.google_service_account.github_ci.email
+}
+
 output "secret_ids" {
   description = "Secret Manager secret IDs the service reads at runtime."
   value = {
