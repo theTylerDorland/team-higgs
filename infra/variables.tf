@@ -73,11 +73,12 @@ variable "google_redirect_uri" {
 variable "higgs_command_image" {
   description = <<-EOT
     Fully-qualified container image for the higgs-command Cloud Run placeholder.
-    Defaults to the public Cloud Run hello image so the address bridge can stand
-    up before the real command-center app exists. The real image is delivered
-    later by `gcloud run deploy` or a CI deploy workflow into the same service;
-    Terraform ignores subsequent image changes so it never reverts a shipped
-    revision.
+    A disposable default (the public Cloud Run hello image) whose only job is to
+    hold the higgs.tylerdorland.com mapping and warm the managed cert. The real
+    command center is a SEPARATE, gated service (its own project/identity/auth) —
+    NOT this one — so no real image is ever delivered here; this placeholder is
+    retired at cutover. `ignore_changes` on the image only keeps Terraform from
+    reverting an out-of-band swap of this holding page.
   EOT
   type        = string
   default     = "us-docker.pkg.dev/cloudrun/container/hello"
