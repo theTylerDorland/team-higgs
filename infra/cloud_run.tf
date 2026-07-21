@@ -51,6 +51,12 @@ resource "google_cloud_run_v2_service" "plant_log" {
         name  = "GOOGLE_REDIRECT_URI"
         value = var.google_redirect_uri
       }
+      # Empty ⇒ the www→apex 301 redirect is disabled; set to the apex host in
+      # tfvars at cutover to activate it (see plant-log backend PR #11).
+      env {
+        name  = "CANONICAL_HOST"
+        value = var.canonical_host
+      }
       # NOTE: DEV_AUTH is intentionally never set — the dev-login backdoor must
       # never be enabled in production.
 

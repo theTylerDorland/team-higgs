@@ -68,18 +68,8 @@ variable "google_redirect_uri" {
   default     = ""
 }
 
-# --- team-higgs command center (day-zero address bridge) ----------------------
-
-variable "higgs_command_image" {
-  description = <<-EOT
-    Fully-qualified container image for the higgs-command Cloud Run placeholder.
-    A disposable default (the public Cloud Run hello image) whose only job is to
-    hold the higgs.tylerdorland.com mapping and warm the managed cert. The real
-    command center is a SEPARATE, gated service (its own project/identity/auth) —
-    NOT this one — so no real image is ever delivered here; this placeholder is
-    retired at cutover. `ignore_changes` on the image only keeps Terraform from
-    reverting an out-of-band swap of this holding page.
-  EOT
+variable "canonical_host" {
+  description = "Apex canonical host for the www->apex 301 (plant-log). Empty disables the redirect (local/CI/.run.app). Set to the apex domain in tfvars at cutover."
   type        = string
-  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+  default     = ""
 }
