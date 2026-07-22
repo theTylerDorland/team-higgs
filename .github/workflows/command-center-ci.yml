@@ -1,0 +1,98 @@
+# Command-center CI gate (task #29, deliverable #2).
+#
+# Closes the PR #28 security-review major: the first internet-facing service was
+# shipping with no mechanical CI. On any PR that touches the command-center /
+# emctl code this runs two gates — a dependency vulnerability scan (pip-audit)
+# and the pytest suite against a real Postgres — before the change can merge.
+#
+# This is *mechanical* CI: it runs no Claude / model calls, so it is fully
+# compatible with the subscription model (docs/stack-devops.md). It needs NO
+# GCP access and NO long-lived credentials: the tests run against an ephemeral
+# Postgres service container, and pip-audit hits only the public advisory DB.
+# There is therefore no WIF and no secret reference here.
+#
+# Least privilege: the workflow's GITHUB_TOKEN is read-only (`contents: read`);
+# no `pull-requests: write`, `id-token`, packages, or deployments permissions.
+# First- and third-party actions are pinned by commit SHA (not tag) per
+# docs/stack-devops.md.
+#
+# Intended to become a REQUIRED status check on team-higgs `main` — enabling that
+# ruleset is a repo-settings step for Tyler (agents do not set branch protection).
+
+name: command-center CI
+
+on:
+  pull_request:
+    paths:
+      - "command_center/**"
+      - "emctl/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/command-center-ci.yml"
+
+# Least-privilege default for every job in this workflow.
+permissions:
+  contents: read
+
+concurrency:
+  group: command-center-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: pip-audit (dependency scan)
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-python v5.3.0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.12"
+      - name: Install project (web + dev extras) and pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[web,dev]"
+          pip install pip-audit
+      - name: Audit installed dependencies for known vulnerabilities
+        # Audits the resolved environment (the project plus its transitive deps).
+        # Fails the gate on any known advisory; if a non-fixable advisory blocks,
+        # add a reviewed `--ignore-vuln <ID>` here with a comment (never blanket).
+        run: pip-audit
+
+  test:
+    name: pytest (Postgres service container)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: emctl
+          POSTGRES_PASSWORD: emctl
+          POSTGRES_DB: emctl_test
+        ports:
+          - 5432:5432
+        # Hold the job until Postgres accepts connections.
+        options: >-
+          --health-cmd "pg_isready -U emctl"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The test harness (tests/conftest.py) reads DATABASE_URL_TEST, migrates a
+      # throwaway DB, and truncates between tests. Not a secret — an ephemeral,
+      # in-CI Postgres reachable only from this job.
+      DATABASE_URL_TEST: postgresql://emctl:emctl@localhost:5432/emctl_test
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-python v5.3.0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.12"
+      - name: Install project (web + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[web,dev]"
+      - name: Run the test suite
+        run: pytest
