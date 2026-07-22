@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -39,22 +40,39 @@ _DEFAULT_STATIC_DIR = Path(__file__).resolve().parent / "static"
 #     CSP governs under style-src; 'unsafe-inline' is required for them to apply.
 #     This relaxation is scoped to STYLES only — scripts stay locked to 'self',
 #     so the meaningful XSS protection (no inline/eval/foreign script) is intact.
+#   * frame-ancestors 'none' — anti-clickjacking. This does NOT inherit from
+#     default-src (it is one of the directives with no fallback), so it must be
+#     stated explicitly; the app is never legitimately framed, so 'none' is safe
+#     and supersedes the older X-Frame-Options header.
 # This is the strictest policy that does not break the SPA. Widen only with a
 # matching build change (e.g. add connect-src if a websocket/3rd-party API lands).
-_CONTENT_SECURITY_POLICY = "default-src 'self'; style-src 'self' 'unsafe-inline'"
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+)
+
+# Static security headers set on every response (task #34). Deliberately excludes
+# HSTS (TLS terminates at the load balancer, not this app) and X-Frame-Options
+# (frame-ancestors above supersedes it).
+_SECURITY_HEADERS: dict[str, str] = {
+    "Content-Security-Policy": _CONTENT_SECURITY_POLICY,
+    # Stop browsers MIME-sniffing a response into a different, riskier type.
+    "X-Content-Type-Options": "nosniff",
+    # Never leak the command-center URL (which can carry ids) to any origin.
+    "Referrer-Policy": "no-referrer",
+}
 
 
 class SecurityHeadersMiddleware:
-    """Attach static security headers to every response.
+    """Attach a fixed set of security headers to every response.
 
-    Pure ASGI (deliberately NOT ``BaseHTTPMiddleware``): it injects the header on
+    Pure ASGI (deliberately NOT ``BaseHTTPMiddleware``): it injects the headers on
     the ``http.response.start`` message without buffering the body, so the SPA's
     StaticFiles responses keep their Range / conditional-GET (304) behaviour.
     """
 
-    def __init__(self, app: ASGIApp, *, csp: str) -> None:
+    def __init__(self, app: ASGIApp, *, headers: Mapping[str, str]) -> None:
         self._app = app
-        self._csp = csp
+        self._headers = dict(headers)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -63,8 +81,9 @@ class SecurityHeadersMiddleware:
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)
-                headers["Content-Security-Policy"] = self._csp
+                response_headers = MutableHeaders(scope=message)
+                for name, value in self._headers.items():
+                    response_headers[name] = value
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
@@ -104,8 +123,8 @@ def create_app(
         https_only=settings.session_https_only,
     )
 
-    # Emit the CSP on every response (SPA one-image, API, and /healthz alike).
-    app.add_middleware(SecurityHeadersMiddleware, csp=_CONTENT_SECURITY_POLICY)
+    # Emit the security headers on every response (SPA one-image, API, /healthz).
+    app.add_middleware(SecurityHeadersMiddleware, headers=_SECURITY_HEADERS)
 
     register_error_handlers(app)
 
