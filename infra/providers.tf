@@ -7,3 +7,11 @@ provider "google" {
   project = var.project_id
   region  = var.region
 }
+
+# google-beta is configured identically to the GA provider (no credentials here;
+# same WIF/ADC path). It exists solely for google_project_service_identity in
+# infra/command_center_lb.tf, which has no GA equivalent.
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
+}

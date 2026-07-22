@@ -21,6 +21,13 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 6.0"
     }
+    # google-beta backs google_project_service_identity (infra/command_center_lb.tf):
+    # the IAP service agent must be provisioned explicitly, and that resource is
+    # beta-only. Same version track as the GA provider.
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 6.0"
+    }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"

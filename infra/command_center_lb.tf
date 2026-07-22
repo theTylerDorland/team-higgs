@@ -184,15 +184,47 @@ resource "google_compute_global_forwarding_rule" "command_center" {
   load_balancing_scheme = "EXTERNAL_MANAGED"
 }
 
+# --- IAP service agent, provisioned EXPLICITLY (cold-apply race fix) ----------
+# The IAP service agent (service-<PROJECT_NUMBER>@gcp-sa-iap.iam.gserviceaccount.com)
+# is NOT created synchronously when the IAP API is enabled. Enabling the API
+# (google_project_service.iap) kicks off agent provisioning ASYNCHRONOUSLY; on a
+# cold apply the agent does not exist yet when the invoker binding below tries to
+# reference it, and Cloud Run setIamPolicy rejects a non-existent principal with:
+#   Error 400: Service account service-<N>@gcp-sa-iap.iam.gserviceaccount.com does not exist.
+# This is exactly what failed task #38's apply-on-merge twice; depends_on the API
+# alone is insufficient because the API being ENABLED is not the agent being
+# PROVISIONED. google_project_service_identity calls serviceusage
+# generateServiceIdentity, which creates the agent deterministically and returns
+# only once it exists — turning an async race into an ordered dependency.
+#
+# IDEMPOTENT / NO-OP on current prod: generateServiceIdentity is safe to call when
+# the agent already exists (Higgs created it by hand to unblock #38). This resource
+# is not yet in state, so a re-apply CREATES it in state by adopting the existing
+# agent — zero effect on the live agent, and (see the invoker binding) zero churn
+# of the existing run.invoker binding. beta-only resource (provider = google-beta).
+resource "google_project_service_identity" "iap" {
+  count    = var.enable_command_center ? 1 : 0
+  provider = google-beta
+  service  = "iap.googleapis.com"
+
+  depends_on = [google_project_service.iap]
+}
+
 # --- Narrow invoke: IAP service agent ONLY, on the command-center service -----
 # This is the counterpart to command_center.tf's DELIBERATELY-ABSENT allUsers
 # binding. When IAP forwards an authenticated request through a serverless NEG to
 # a Cloud Run service that requires authentication, it invokes as the IAP service
 # agent: service-<PROJECT_NUMBER>@gcp-sa-iap.iam.gserviceaccount.com. That agent —
 # and NOTHING else — is granted run.invoker, resource-scoped to command-center.
-# The agent is auto-provisioned when the IAP API is enabled (depends_on below);
-# Cloud Run setIamPolicy does not require the member to pre-exist, so the ordering
-# is safe. NEVER allUsers (platform risk #3).
+# NEVER allUsers (platform risk #3).
+#
+# ORDERING (the fix): depends_on the google_project_service_identity.iap resource
+# above, which guarantees the agent EXISTS before this binding is applied. The
+# member string is left byte-for-byte identical (built from the project number,
+# known at plan time) precisely so this is a NO-OP against the existing binding in
+# prod: switching to a reference on the identity's computed .email would make member
+# "known after apply" during the apply that creates the identity, and since member
+# is ForceNew that would replace the live binding — the opposite of what we want.
 resource "google_cloud_run_v2_service_iam_member" "command_center_iap_invoker" {
   count    = var.enable_command_center ? 1 : 0
   project  = google_cloud_run_v2_service.command_center[0].project
@@ -201,7 +233,7 @@ resource "google_cloud_run_v2_service_iam_member" "command_center_iap_invoker" {
   role     = "roles/run.invoker"
   member   = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-iap.iam.gserviceaccount.com"
 
-  depends_on = [google_project_service.iap]
+  depends_on = [google_project_service_identity.iap]
 }
 
 # --- IAP allowlist: Tyler only ------------------------------------------------
