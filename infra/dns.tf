@@ -215,13 +215,26 @@ resource "google_dns_record_set" "tylerdorland_www_cname" {
   rrdatas      = ["ext-sq.squarespace.com."]
 }
 
-# higgs -> Cloud Run domain mapping for the command-center address bridge
-# (higgs_command.tf). This is the record that was hand-added at Squarespace and
-# is now brought under Terraform.
+# higgs -> command-center external HTTPS load balancer (command_center_lb.tf).
+# DNS CUTOVER (runbook infra/command-center-cutover.md step 4): this record used
+# to be a CNAME to ghs.googlehosted.com. — the Cloud Run domain mapping of the
+# `higgs-command` PLACEHOLDER. It is now an A record to the command-center LB's
+# static anycast IP (google_compute_global_address.command_center — the
+# `command-center-lb-ip`), moving higgs.tylerdorland.com onto the IAP-gated
+# command-center front door. The IP is referenced by resource attribute, never
+# hardcoded, so it tracks the LB address in state.
+#
+# TTL lowered 14400 -> 300 so a future flip (or the rollback below) propagates in
+# minutes, not hours. Once this resolves to the LB, the managed cert
+# `command-center-cert` (command_center_lb.tf) provisions PROVISIONING -> ACTIVE.
+#
+# ROLLBACK: revert to type=CNAME, rrdatas=["ghs.googlehosted.com."]; the
+# `higgs-command` placeholder still serves until its separate retirement PR
+# (runbook step 5).
 resource "google_dns_record_set" "tylerdorland_higgs_cname" {
   managed_zone = google_dns_managed_zone.tylerdorland_com.name
   name         = "higgs.${google_dns_managed_zone.tylerdorland_com.dns_name}"
-  type         = "CNAME"
-  ttl          = 14400
-  rrdatas      = ["ghs.googlehosted.com."]
+  type         = "A"
+  ttl          = 300
+  rrdatas      = [google_compute_global_address.command_center[0].address]
 }
