@@ -59,6 +59,22 @@ resource "google_project_iam_member" "github_ci_run_admin" {
   member  = local.github_ci_member
 }
 
+# roles/iam.serviceAccountUser (project-level) — actAs on runtime service
+# accounts. Deploying/updating ANY Cloud Run service requires actAs on the SA the
+# service runs as; run.admin above does NOT grant it. github-ci already holds a
+# resource-scoped actAs on plantlog-run (github_ci_actas_runtime, wif.tf), but
+# apply now also stands up the command-center service (runs as command-center-run,
+# command_center.tf) and will deploy future services with their own runtime SAs.
+# Project-level serviceAccountUser is the minimum that covers actAs across all of
+# them without a new per-SA binding each time. Already granted out-of-band, so
+# this _member create idempotently ADOPTS the existing grant (0 destroy). See
+# learning #15 (complete github-ci role set).
+resource "google_project_iam_member" "github_ci_service_account_user" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountUser"
+  member  = local.github_ci_member
+}
+
 # roles/cloudsql.admin — manages the shared Postgres instance, the plantlog
 # database, and the plantlog user. Creating instances/databases/users has no
 # narrower predefined role. prevent_destroy + deletion_protection still guard
@@ -129,15 +145,24 @@ resource "google_project_iam_member" "github_ci_project_iam_admin" {
   member  = local.github_ci_member
 }
 
-# roles/storage.objectAdmin on the Terraform STATE bucket only (not project-wide
-# storage). Apply reads/writes the state object and creates/deletes the state
-# LOCK object; objectAdmin scoped to the single bucket is the standard,
-# well-understood grant for a Terraform GCS backend. The bucket name is the
-# day-zero state bucket (see backend.hcl); it is non-secret and stable.
-# (A slightly tighter roles/storage.objectUser is a possible follow-up.)
+# roles/storage.admin on the Terraform STATE bucket only (not project-wide
+# storage). RECONCILED from roles/storage.objectAdmin (task #37). Apply must not
+# only read/write the state object and manage the state LOCK object (objectAdmin's
+# scope) but ALSO REFRESH THIS RESOURCE — the state bucket's OWN IAM policy — on
+# every plan/apply, which requires storage.buckets.getIamPolicy. objectAdmin does
+# NOT include that permission, so a github-ci-driven run could not refresh its own
+# state-bucket binding (self-referential); storage.admin (still bucket-scoped) is
+# the minimum predefined role that adds it. See learning #15.
+#
+# NON-DESTRUCTIVE RECONCILE: github-ci ALREADY holds storage.admin on this bucket
+# out-of-band, so this _member create idempotently ADOPTS the existing grant. The
+# superseded objectAdmin binding is dropped as redundant, but state access is
+# never revoked — storage.admin is a strict superset of objectAdmin and is present
+# before, during, and after the change. The bucket is the day-zero state bucket
+# (see backend.hcl); non-secret and stable.
 resource "google_storage_bucket_iam_member" "github_ci_tfstate" {
   bucket = "team-higgs-platform-tfstate"
-  role   = "roles/storage.objectAdmin"
+  role   = "roles/storage.admin"
   member = local.github_ci_member
 }
 

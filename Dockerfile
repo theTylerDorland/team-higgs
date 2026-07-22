@@ -12,7 +12,13 @@
 # Python image copies and FastAPI serves. Kept in a separate stage so Node and
 # node_modules never reach the runtime image.
 FROM node:22-slim AS frontend
-RUN corepack enable
+# pnpm pinned to match the committed pnpm-lock.yaml, mirroring plant-log's
+# Dockerfile. corepack's shim resolves whatever pnpm the ambient version policy
+# points at (currently pnpm 11, whose minimumReleaseAge rule rejects freshly
+# published transitive deps and fails `pnpm install --frozen-lockfile`); pinning
+# the exact version corepack used before that policy landed keeps the frozen
+# install deterministic.
+RUN npm install -g pnpm@9.15.9
 WORKDIR /build/command_center/frontend
 # Types are generated from the contract, so the schema must be in place first.
 COPY command_center/openapi.json /build/command_center/openapi.json

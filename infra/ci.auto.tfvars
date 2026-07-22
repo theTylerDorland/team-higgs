@@ -43,9 +43,23 @@ canonical_host = "airportbar.app"
 # ignored by lifecycle, so this only matters on first create).
 higgs_command_image = "us-docker.pkg.dev/cloudrun/container/hello"
 
-# Command center (command_center.tf) stays GATED OFF in CI (task #36). Its
-# resources are count=0 and NOT in Terraform state, so this is a true no-op; it is
-# flipped to true by the reachability epic (task #33) together with a real
-# cc_google_client_id. Explicit here so the apply-on-merge config is unambiguous
-# and does not lean on the variable's default.
-enable_command_center = false
+# Command center (command_center.tf) — ENABLED (task #37). Flipping this from
+# false to true un-gates every command_center.tf resource (count 0 -> 1): the
+# gated Cloud Run service, its least-privilege runtime SA, its four Secret Manager
+# containers + placeholder versions + per-secret IAM. This is the FIRST create of
+# these resources (they were never in state while gated off), so the flip is pure
+# add, zero destroy.
+#
+# The service comes up LOCKED: ingress = INTERNAL_LOAD_BALANCER and NO allUsers
+# run.invoker binding (command_center.tf), so it is unreachable from the open
+# internet by construction. Reachability (the IAP-fronted external HTTPS load
+# balancer) is the SEPARATE epic, task #33 — not this PR.
+enable_command_center = true
+
+# Command-center Google OAuth client ID — PUBLIC, NON-SECRET (it is sent to every
+# browser that hits the sign-in page). The matching client SECRET is NOT here; it
+# lives in Secret Manager (command-center-google-client-secret), set out-of-band.
+# A non-empty value both wires real OIDC AND arms the backend's fail-closed
+# DEV_AUTH guard (command_center/config.py); with the service now enabled, the
+# variable's validation requires it to be non-empty (variables.tf).
+cc_google_client_id = "565122789946-540lt8tjf813lhsu3kmacb9o82boc4cf.apps.googleusercontent.com"
