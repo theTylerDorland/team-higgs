@@ -103,7 +103,7 @@ Verify the schema landed at head:
 psql "postgresql://postgres:PGPW@127.0.0.1:5432/platform" \
   -c "\dt" \
   -c "select version_num from alembic_version;"
-# expect the 13 app tables + alembic_version, version_num = 0007
+# expect the 15 app tables + alembic_version, version_num = 0007
 ```
 
 ## Step 4 — Least-privilege GRANTs for `command_center` (as `postgres`)
@@ -117,20 +117,29 @@ psql "postgresql://postgres:PGPW@127.0.0.1:5432/platform" -v ON_ERROR_STOP=1 <<'
 GRANT CONNECT ON DATABASE platform TO command_center;
 GRANT USAGE  ON SCHEMA public      TO command_center;
 
--- DML the command center actually performs: it READS every emctl table and
--- WRITES approvals (in-place status/note UPDATEs on prs/tasks/artifacts/decisions),
--- grooming (UPDATE tasks.groom_rank), and notes (INSERT). No DELETE, no TRUNCATE,
--- no DDL — domain state is append-only (edits are new rows or in-place UPDATEs),
--- and the schema is owned by `postgres`/`emctl migrate`, never the app role.
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES    IN SCHEMA public TO command_center;
-GRANT USAGE,  SELECT         ON ALL SEQUENCES IN SCHEMA public TO command_center;
+-- READ every emctl table (dashboards + approval/grooming views read broadly).
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO command_center;
 
--- Cover future tables/sequences created by the migrating role (postgres) so a
--- later `emctl migrate` does not silently drop the app role's access.
+-- WRITE only the tables the command center actually mutates: approvals (in-place
+-- status/note UPDATEs on prs/tasks/artifacts/decisions) and Tyler notes (INSERT).
+-- It gets NO write on the audit/history/register tables (reviews, task_events,
+-- risks, runs, questions, learnings, debt, metrics, retros, projects). No DELETE,
+-- no TRUNCATE, no DDL — domain state is append-only (edits are new rows or
+-- in-place UPDATEs) and the schema is owned by `postgres`/`emctl migrate`, never
+-- the app role.
+GRANT INSERT, UPDATE ON prs, tasks, artifacts, decisions, notes TO command_center;
+
+-- INSERTs into the five writable tables advance their SERIAL primary-key
+-- sequences (named <table>_id_seq), so grant USAGE/SELECT on exactly those.
+GRANT USAGE, SELECT ON SEQUENCE
+  prs_id_seq, tasks_id_seq, artifacts_id_seq, decisions_id_seq, notes_id_seq
+  TO command_center;
+
+-- Future tables created by the migrating role (postgres) are READABLE by default;
+-- any write access to a new table is a deliberate, explicit grant (least privilege
+-- — a new table does not silently become writable by the app).
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE ON TABLES    TO command_center;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-  GRANT USAGE,  SELECT         ON SEQUENCES TO command_center;
+  GRANT SELECT ON TABLES TO command_center;
 
 -- Defence in depth: the app role must never create objects in public.
 REVOKE CREATE ON SCHEMA public FROM command_center;
@@ -141,14 +150,20 @@ SQL
 > `ALTER DEFAULT PRIVILEGES` lines `FOR ROLE <that role>` — default privileges are
 > keyed by the object-creating role.
 
-Verify the boundary (expect `SELECT,INSERT,UPDATE`, and no privilege on a
-representative table for anything the role should not have):
+Verify the boundary — a writable table carries exactly `INSERT,SELECT,UPDATE`,
+and a read-only/audit table carries `SELECT` only:
 
 ```sh
 psql "postgresql://postgres:PGPW@127.0.0.1:5432/platform" -c \
-  "select privilege_type from information_schema.role_table_grants
-   where grantee='command_center' and table_name='tasks' order by 1;"
-# expect exactly: INSERT, SELECT, UPDATE  (no DELETE / TRUNCATE / REFERENCES / TRIGGER)
+  "select table_name, string_agg(privilege_type, ',' order by privilege_type) AS privs
+   from information_schema.role_table_grants
+   where grantee='command_center'
+     and table_name in ('tasks','prs','notes','reviews','task_events','risks','runs')
+   group by table_name order by table_name;"
+# expect:
+#   notes,prs,tasks  -> INSERT,SELECT,UPDATE
+#   reviews,risks,runs,task_events -> SELECT
+# (no DELETE / TRUNCATE / REFERENCES / TRIGGER anywhere)
 ```
 
 ## Step 5 — Load existing state (data-only) and verify row counts
@@ -176,7 +191,7 @@ Verify row counts match table-by-table (the acceptance gate for the migration):
 LOCAL="postgresql://platform:localdev@localhost:5433/platform"
 CLOUD="postgresql://postgres:PGPW@127.0.0.1:5432/platform"
 for t in projects tasks runs prs reviews questions decisions \
-         artifacts learnings debt metrics retros notes; do
+         artifacts learnings debt metrics retros risks task_events notes; do
   l=$(psql "$LOCAL" -tAc "select count(*) from $t")
   c=$(psql "$CLOUD" -tAc "select count(*) from $t")
   printf '%-12s local=%-5s cloud=%-5s %s\n' "$t" "$l" "$c" \
@@ -184,14 +199,16 @@ for t in projects tasks runs prs reviews questions decisions \
 done
 ```
 
-**Expected: every row `OK`; `tasks` = 39** (and `decisions`, `risks*`, `runs`
-non-zero and equal). Do not proceed on any `MISMATCH`.
+The loop covers **all 15** head-0007 tables — including `risks` (the platform
+risk register) and `task_events` (task audit history), which `pg_dump
+--data-only` copies but earlier drafts of this gate did not check. The gate is
+self-deriving: it prints the live source (`local=`) count beside the Cloud SQL
+(`cloud=`) count for every table, so the expected value for each is exactly its
+source count — read them off the `local=` column and confirm each row says `OK`.
 
-> \*The current schema has no `risks` table (state v1 = projects, tasks, runs,
-> prs, reviews, questions, decisions, artifacts, learnings, debt, metrics, retros,
-> notes). "risks" in the task brief maps to the platform-risk records tracked
-> elsewhere; the row-count gate covers the 13 tables that exist. If a `risks`
-> table has been added by a later migration before this runs, add it to the loop.
+**Do not proceed on any `MISMATCH`, or if any table is missing from the output.**
+Sanity anchor: `tasks` = 39 (per the task brief); `risks`, `task_events`,
+`decisions`, `runs` are all non-zero.
 
 ## Step 6 — Cut emctl over to Cloud SQL (Higgs's daily target)
 
@@ -248,7 +265,7 @@ printf '%s' \
   ```sh
   psql "$CLOUD" -v ON_ERROR_STOP=1 -c \
     "TRUNCATE projects, tasks, runs, prs, reviews, questions, decisions,
-              artifacts, learnings, debt, metrics, retros, notes
+              artifacts, learnings, debt, metrics, retros, risks, task_events, notes
      RESTART IDENTITY CASCADE;"
   # then re-run step 5b + the row-count check.
   ```
