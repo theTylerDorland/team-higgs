@@ -54,6 +54,16 @@ Defaults you can leave alone: `sql_instance_name = "platform-pg"`,
 `db_tier = "db-f1-micro"`, `artifact_registry_repo = "plant-log"`,
 `plantlog_image` = public placeholder.
 
+**`enable_command_center`** (default `false`, task #36) gates the whole gated
+command-center service in `command_center.tf` behind `count`. Off, its resources
+are not created (and are not in state), which keeps apply-on-merge from demanding
+the not-yet-real `cc_google_client_id`. The reachability epic (task #33) flips it
+to `true` alongside a real `cc_google_client_id`; the variable validation rejects
+a blank ID once the flag is true (fail-closed). Also in task #36: `github-ci`
+self-grants `roles/dns.admin` + `roles/serviceusage.serviceUsageAdmin` for the DNS
+module (`infra/dns.tf`) inside the same apply, gated by a `time_sleep` that lets
+the IAM grants propagate before the zones are created — see `terraform-ci.md`.
+
 ## Secrets
 
 Nothing secret lives in this repo, in `terraform.tfvars`, or in any workflow.

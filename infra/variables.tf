@@ -92,6 +92,21 @@ variable "higgs_command_image" {
 
 # --- command center (the REAL gated service; command_center.tf) ---------------
 
+variable "enable_command_center" {
+  description = <<-EOT
+    Master switch for the gated command-center service (command_center.tf). When
+    false (the default), EVERY command_center.tf resource is count=0 — the service,
+    its runtime SA, its four secrets, and their IAM are not created. This keeps the
+    apply-on-merge pipeline unblocked while the command center is still pre-launch:
+    its resources are NOT in Terraform state, so gating to 0 is a true no-op (zero
+    destroys). It is flipped to true by the reachability epic (task #33), together
+    with a real cc_google_client_id, when the IAP-fronted load balancer that makes
+    the service reachable lands. Until then it must stay false in CI.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "command_center_image" {
   description = <<-EOT
     Fully-qualified container image for the command-center Cloud Run service.
@@ -114,13 +129,27 @@ variable "cc_allowed_emails" {
 variable "cc_google_client_id" {
   description = <<-EOT
     Google OAuth 2.0 Web client ID for the command-center sign-in. NOT a secret
-    (the matching client *secret* lives in Secret Manager). REQUIRED with no
-    default: a non-empty value both wires real OIDC and arms the backend's
-    fail-closed DEV_AUTH guard (command_center/config.py), so a blank must never
-    ship. This is a NEW OAuth client, separate from plant-log's — Tyler creates
-    it and supplies the ID in terraform.tfvars.
+    (the matching client *secret* lives in Secret Manager). A non-empty value both
+    wires real OIDC and arms the backend's fail-closed DEV_AUTH guard
+    (command_center/config.py), so a blank must never ship WITH THE SERVICE LIVE.
+    This is a NEW OAuth client, separate from plant-log's — Tyler creates it and
+    supplies the ID in terraform.tfvars when enable_command_center flips to true.
+
+    Default is "" so that, while the service is gated OFF (enable_command_center =
+    false), no value is demanded and the apply-on-merge plan resolves from
+    ci.auto.tfvars alone. The fail-closed intent is preserved by the validation
+    below: an empty ID is rejected the moment the service is enabled.
   EOT
   type        = string
+  default     = ""
+
+  validation {
+    # Fail closed: the command center must never be stood up with a blank
+    # GOOGLE_CLIENT_ID. The empty default is valid ONLY while enable_command_center
+    # is false (the resources are count=0); enabling the service demands a real ID.
+    condition     = !var.enable_command_center || length(trimspace(var.cc_google_client_id)) > 0
+    error_message = "cc_google_client_id must be a non-empty OAuth client ID when enable_command_center = true (it arms the fail-closed DEV_AUTH guard, command_center/config.py). Set it in terraform.tfvars / ci.auto.tfvars, or set enable_command_center = false."
+  }
 }
 
 variable "cc_google_redirect_uri" {

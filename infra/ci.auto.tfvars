@@ -42,3 +42,10 @@ canonical_host = "airportbar.app"
 # higgs-command placeholder image (disposable hello page; image changes are
 # ignored by lifecycle, so this only matters on first create).
 higgs_command_image = "us-docker.pkg.dev/cloudrun/container/hello"
+
+# Command center (command_center.tf) stays GATED OFF in CI (task #36). Its
+# resources are count=0 and NOT in Terraform state, so this is a true no-op; it is
+# flipped to true by the reachability epic (task #33) together with a real
+# cc_google_client_id. Explicit here so the apply-on-merge config is unambiguous
+# and does not lean on the variable's default.
+enable_command_center = false

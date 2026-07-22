@@ -25,10 +25,14 @@ allowed_emails = "you@example.com,partner@example.com"
 # plantlog_image = "us-docker.pkg.dev/cloudrun/container/hello"
 
 # --- command center (the REAL gated service) ---------------------------------
-# REQUIRED: the command-center OAuth Web client ID (a NEW client, separate from
-# plant-log's; NOT secret). A non-empty value both wires OIDC and arms the
-# backend's fail-closed DEV_AUTH guard, so it must never be blank.
-cc_google_client_id = "REPLACE-WITH-COMMAND-CENTER-OAUTH-CLIENT-ID"
+# GATED OFF by default (task #36): the whole command_center.tf service is behind
+# `count = var.enable_command_center ? 1 : 0`. Leave it false until the
+# reachability epic (task #33). When you flip it on, you MUST also supply a real
+# cc_google_client_id (a NEW OAuth Web client, separate from plant-log's; NOT
+# secret) — the variable validation rejects a blank ID once the flag is true,
+# because a non-empty ID both wires OIDC and arms the fail-closed DEV_AUTH guard.
+# enable_command_center = true
+# cc_google_client_id   = "REPLACE-WITH-COMMAND-CENTER-OAUTH-CLIENT-ID"
 
 # Optional overrides (defaults shown):
 # cc_allowed_emails      = "tyler@tylerdorland.com"   # Tyler only (decision #17)

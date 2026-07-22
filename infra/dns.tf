@@ -43,9 +43,15 @@
 #   disable_on_destroy = false — destroying this config must NEVER disable the
 #   DNS API underneath a live zone or a later re-apply; API-disable is a
 #   deliberate, out-of-band action, not a side effect of `terraform destroy`.
+#   depends_on = time_sleep.dns_iam_propagation — managing this service resource
+#   needs roles/serviceusage.serviceUsageAdmin, which github-ci self-grants in the
+#   SAME apply-on-merge run (infra/ci_iam.tf). The wait absorbs IAM-propagation lag
+#   so this call is not issued before the grant is effective.
 resource "google_project_service" "dns" {
   service            = "dns.googleapis.com"
   disable_on_destroy = false
+
+  depends_on = [time_sleep.dns_iam_propagation]
 }
 
 # =============================================================================
@@ -62,8 +68,13 @@ resource "google_dns_managed_zone" "airportbar_app" {
   # is not signed today, and enabling it would change the delegation contract and
   # add a DS-record step to the cutover. Signing is a separate, deliberate task.
 
-  # Gate zone creation on the DNS API being enabled (self-contained apply).
-  depends_on = [google_project_service.dns]
+  # Gate zone creation on the DNS API being enabled (self-contained apply) AND on
+  # the IAM-propagation wait: zone creation needs roles/dns.admin, which github-ci
+  # self-grants in this same apply (infra/ci_iam.tf).
+  depends_on = [
+    google_project_service.dns,
+    time_sleep.dns_iam_propagation,
+  ]
 }
 
 # Apex A -> Cloud Run's anycast frontend (the ghs A set the domain mapping emits).
@@ -151,8 +162,12 @@ resource "google_dns_managed_zone" "tylerdorland_com" {
 
   # DNSSEC intentionally OFF (see airportbar zone note).
 
-  # Gate zone creation on the DNS API being enabled (self-contained apply).
-  depends_on = [google_project_service.dns]
+  # Gate zone creation on the DNS API being enabled (self-contained apply) AND on
+  # the IAM-propagation wait (roles/dns.admin self-grant; see the airportbar zone).
+  depends_on = [
+    google_project_service.dns,
+    time_sleep.dns_iam_propagation,
+  ]
 }
 
 # Apex A -> Squarespace site frontend. MUST keep serving.

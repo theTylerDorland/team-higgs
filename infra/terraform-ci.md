@@ -57,6 +57,35 @@ authoritative committed config and supersedes the local, gitignored
 `terraform.tfvars` for its keys (`.auto.tfvars` overrides `terraform.tfvars`);
 keep them consistent or remove the redundant local file.
 
+### `enable_command_center` (task #36)
+
+`ci.auto.tfvars` sets **`enable_command_center = false`**. Every resource in
+`command_center.tf` is gated behind `count = var.enable_command_center ? 1 : 0`,
+so with the flag off the gated service, its runtime SA, its four secrets and their
+IAM are **not** created (0 instances in the plan). This keeps apply-on-merge
+unblocked: the gated service requires a real `cc_google_client_id`, which does not
+exist yet, and demanding it would fail variable resolution before any apply — the
+failure that motivated this task. Because these resources were never applied and
+are not in state, gating them off is a true no-op (zero destroys).
+
+The **reachability epic (task #33)** flips `enable_command_center = true` and
+supplies a real `cc_google_client_id` at the same time (the variable's validation
+rejects a blank ID the moment the flag is true — fail-closed). Do not enable the
+service before its reachability fronting and OAuth client exist.
+
+### DNS grants self-applied within one run (task #36)
+
+`infra/dns.tf` (PR #31) needs `github-ci` to hold `roles/dns.admin` (zones +
+record sets) and `roles/serviceusage.serviceUsageAdmin` (`google_project_service.dns`).
+It held neither, which is why the DNS apply-on-merge first failed. Rather than a
+manual pre-grant by Tyler, `ci_iam.tf` adds those two bindings and github-ci
+**self-grants** them inside the same apply — it already holds
+`resourcemanager.projectIamAdmin`. Because IAM writes propagate asynchronously, a
+`time_sleep.dns_iam_propagation` (90s) sits between the two new bindings and the
+DNS resources (which `depend_on` it), so within one run the order is: write
+bindings → wait → enable the DNS API + create the zones. No manual bootstrap step
+is required.
+
 ## One-time setup (Tyler, once)
 
 CI cannot apply the change that grants CI its own permissions — the same
@@ -112,7 +141,9 @@ The full grant delta and its blast-radius ranking is in the PR "Surface"
 section; `ci_iam.tf` documents each binding inline. Headline: `github-ci` gains
 project-scoped `run.admin`, `cloudsql.admin`, `secretmanager.admin`,
 `artifactregistry.admin`, `iam.serviceAccountAdmin`,
-`iam.workloadIdentityPoolAdmin`, and — highest blast radius —
-`resourcemanager.projectIamAdmin`, plus `storage.objectAdmin` on the state
-bucket. This makes `github-ci` an effectively project-admin identity; it stays
-main-ref-only. Proposed mitigations are in the PR Follow-ups.
+`iam.workloadIdentityPoolAdmin`, `dns.admin`,
+`serviceusage.serviceUsageAdmin` (the last two added in task #36 for the DNS
+module), and — highest blast radius — `resourcemanager.projectIamAdmin`, plus
+`storage.objectAdmin` on the state bucket. This makes `github-ci` an effectively
+project-admin identity; it stays main-ref-only. Proposed mitigations are in the PR
+Follow-ups.

@@ -25,5 +25,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # time_sleep for the CI IAM-propagation barrier before the DNS module applies
+    # (infra/ci_iam.tf, task #36).
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
   }
 }

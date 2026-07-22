@@ -140,3 +140,60 @@ resource "google_storage_bucket_iam_member" "github_ci_tfstate" {
   role   = "roles/storage.objectAdmin"
   member = local.github_ci_member
 }
+
+# -----------------------------------------------------------------------------
+# DNS module grants (task #36) — needed for infra/dns.tf.
+#
+# The Cloud DNS module (PR #31) declares google_dns_managed_zone /
+# google_dns_record_set (needs roles/dns.admin) and google_project_service.dns
+# (needs roles/serviceusage.serviceUsageAdmin to manage API enablement). github-ci
+# held NEITHER, so the first apply-on-merge over the DNS module failed. These two
+# additive _member grants close that gap. Both are project-scoped: dns.admin has
+# no narrower predefined role that can create zones + record sets, and service
+# enablement is inherently a project-level operation.
+#
+# SELF-GRANT within a single apply: github-ci already holds
+# roles/resourcemanager.projectIamAdmin (above), so the SAME apply-on-merge run
+# that adds these two bindings is authorized to write them — no manual pre-grant
+# by Tyler. The only hazard is IAM propagation lag: a freshly written binding is
+# not always effective the instant the resource create call fires. The time_sleep
+# below absorbs that lag (see its comment). This is a PRIVILEGE EXPANSION of the
+# CI identity — flagged for security review (PR "Surface").
+# -----------------------------------------------------------------------------
+
+# roles/dns.admin — create/manage the two managed zones and every record set in
+# infra/dns.tf. (No resource-scoped DNS role exists for zone creation.)
+resource "google_project_iam_member" "github_ci_dns_admin" {
+  project = var.project_id
+  role    = "roles/dns.admin"
+  member  = local.github_ci_member
+}
+
+# roles/serviceusage.serviceUsageAdmin — manage google_project_service.dns
+# (enable/own the dns.googleapis.com service). serviceUsageConsumer can only USE
+# enabled services, not manage enablement, so admin is the minimum that lets
+# Terraform own the API-enablement resource.
+resource "google_project_iam_member" "github_ci_serviceusage_admin" {
+  project = var.project_id
+  role    = "roles/serviceusage.serviceUsageAdmin"
+  member  = local.github_ci_member
+}
+
+# IAM-propagation barrier (task #36). github-ci self-grants the two roles above in
+# THIS apply, but GCP IAM changes propagate asynchronously — a zone/create call
+# issued microseconds after the binding write can still see the OLD policy and
+# 403. This time_sleep forces a fixed pause AFTER the two bindings are written and
+# BEFORE anything that needs them runs. google_project_service.dns and both DNS
+# zones depend_on it (infra/dns.tf), so within one apply-on-merge run the order is:
+# write bindings -> wait 90s -> enable dns.googleapis.com + create zones. The wait
+# only runs when this resource is first CREATED; once it is in state, subsequent
+# applies do not re-pause. 90s is comfortably above observed project-IAM
+# propagation, without materially slowing the pipeline.
+resource "time_sleep" "dns_iam_propagation" {
+  create_duration = "90s"
+
+  depends_on = [
+    google_project_iam_member.github_ci_dns_admin,
+    google_project_iam_member.github_ci_serviceusage_admin,
+  ]
+}

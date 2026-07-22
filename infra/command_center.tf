@@ -7,6 +7,13 @@
 # locked fronting is stood up; the cutover (domain move + placeholder retirement)
 # is a sequenced runbook step, see the PR. Nothing here removes the placeholder.
 #
+# GATED (task #36): every resource in this file is behind
+# `count = var.enable_command_center ? 1 : 0`, default false. The command center
+# is stood up by the reachability epic (task #33) with a real cc_google_client_id;
+# until then these resources are count=0 and NOT in Terraform state, so the flag
+# being off is a true no-op (zero creates, zero destroys) and the apply-on-merge
+# pipeline is never blocked by the required-OIDC-client-id precondition.
+#
 # WHAT EACH GCP PIECE DOES (for the backend engineer reading this in review):
 #   * google_service_account.command_center_run — the identity the container runs
 #     as. It is granted exactly two things: read its own four secrets, and open a
@@ -28,6 +35,7 @@
 # --- Least-privilege runtime identity ----------------------------------------
 
 resource "google_service_account" "command_center_run" {
+  count        = var.enable_command_center ? 1 : 0
   account_id   = "command-center-run"
   display_name = "command-center Cloud Run runtime"
 }
@@ -41,9 +49,10 @@ resource "google_service_account" "command_center_run" {
 # service still boots and passes /healthz (a static probe), so the wiring is
 # correct and complete ahead of the state-store migration. See PR "Not done".
 resource "google_project_iam_member" "command_center_cloudsql_client" {
+  count   = var.enable_command_center ? 1 : 0
   project = var.project_id
   role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.command_center_run.email}"
+  member  = "serviceAccount:${google_service_account.command_center_run[0].email}"
 }
 
 # --- Secret Manager: the service's four runtime secrets ----------------------
@@ -55,6 +64,7 @@ resource "google_project_iam_member" "command_center_cloudsql_client" {
 
 # SESSION_SECRET — signs the session cookie. Terraform-generated.
 resource "google_secret_manager_secret" "cc_session_secret" {
+  count     = var.enable_command_center ? 1 : 0
   secret_id = "command-center-session-secret"
   replication {
     auto {}
@@ -62,19 +72,22 @@ resource "google_secret_manager_secret" "cc_session_secret" {
 }
 
 resource "random_password" "cc_session_secret" {
+  count   = var.enable_command_center ? 1 : 0
   length  = 48
   special = false
 }
 
 resource "google_secret_manager_secret_version" "cc_session_secret" {
-  secret      = google_secret_manager_secret.cc_session_secret.id
-  secret_data = random_password.cc_session_secret.result
+  count       = var.enable_command_center ? 1 : 0
+  secret      = google_secret_manager_secret.cc_session_secret[0].id
+  secret_data = random_password.cc_session_secret[0].result
 }
 
 # GOOGLE_CLIENT_SECRET — issued by Google for the command-center OAuth client
 # (a NEW client, separate from plant-log's). Placeholder seeded so "latest"
 # resolves on first apply; Tyler adds the real value out-of-band.
 resource "google_secret_manager_secret" "cc_google_client_secret" {
+  count     = var.enable_command_center ? 1 : 0
   secret_id = "command-center-google-client-secret"
   replication {
     auto {}
@@ -82,7 +95,8 @@ resource "google_secret_manager_secret" "cc_google_client_secret" {
 }
 
 resource "google_secret_manager_secret_version" "cc_google_client_secret_placeholder" {
-  secret      = google_secret_manager_secret.cc_google_client_secret.id
+  count       = var.enable_command_center ? 1 : 0
+  secret      = google_secret_manager_secret.cc_google_client_secret[0].id
   secret_data = "SET-REAL-VALUE-OUT-OF-BAND"
 
   lifecycle {
@@ -98,6 +112,7 @@ resource "google_secret_manager_secret_version" "cc_google_client_secret_placeho
 # service starts; with a placeholder token the merge endpoint degrades cleanly
 # (503), it does not crash (command_center/github.py).
 resource "google_secret_manager_secret" "cc_github_token" {
+  count     = var.enable_command_center ? 1 : 0
   secret_id = "command-center-github-token"
   replication {
     auto {}
@@ -105,7 +120,8 @@ resource "google_secret_manager_secret" "cc_github_token" {
 }
 
 resource "google_secret_manager_secret_version" "cc_github_token_placeholder" {
-  secret      = google_secret_manager_secret.cc_github_token.id
+  count       = var.enable_command_center ? 1 : 0
+  secret      = google_secret_manager_secret.cc_github_token[0].id
   secret_data = "SET-REAL-VALUE-OUT-OF-BAND"
 
   lifecycle {
@@ -118,6 +134,7 @@ resource "google_secret_manager_secret_version" "cc_github_token_placeholder" {
 # out-of-band then. Kept as a secret (it carries a DB password) and read by
 # reference, never in the repo.
 resource "google_secret_manager_secret" "cc_database_url" {
+  count     = var.enable_command_center ? 1 : 0
   secret_id = "command-center-database-url"
   replication {
     auto {}
@@ -125,7 +142,8 @@ resource "google_secret_manager_secret" "cc_database_url" {
 }
 
 resource "google_secret_manager_secret_version" "cc_database_url_placeholder" {
-  secret      = google_secret_manager_secret.cc_database_url.id
+  count       = var.enable_command_center ? 1 : 0
+  secret      = google_secret_manager_secret.cc_database_url[0].id
   secret_data = "SET-REAL-VALUE-OUT-OF-BAND"
 
   lifecycle {
@@ -135,31 +153,36 @@ resource "google_secret_manager_secret_version" "cc_database_url_placeholder" {
 
 # --- Per-secret IAM: the runtime SA reads only these four secrets -------------
 resource "google_secret_manager_secret_iam_member" "cc_session_secret" {
-  secret_id = google_secret_manager_secret.cc_session_secret.id
+  count     = var.enable_command_center ? 1 : 0
+  secret_id = google_secret_manager_secret.cc_session_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.command_center_run.email}"
+  member    = "serviceAccount:${google_service_account.command_center_run[0].email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "cc_google_client_secret" {
-  secret_id = google_secret_manager_secret.cc_google_client_secret.id
+  count     = var.enable_command_center ? 1 : 0
+  secret_id = google_secret_manager_secret.cc_google_client_secret[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.command_center_run.email}"
+  member    = "serviceAccount:${google_service_account.command_center_run[0].email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "cc_github_token" {
-  secret_id = google_secret_manager_secret.cc_github_token.id
+  count     = var.enable_command_center ? 1 : 0
+  secret_id = google_secret_manager_secret.cc_github_token[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.command_center_run.email}"
+  member    = "serviceAccount:${google_service_account.command_center_run[0].email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "cc_database_url" {
-  secret_id = google_secret_manager_secret.cc_database_url.id
+  count     = var.enable_command_center ? 1 : 0
+  secret_id = google_secret_manager_secret.cc_database_url[0].id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.command_center_run.email}"
+  member    = "serviceAccount:${google_service_account.command_center_run[0].email}"
 }
 
 # --- The gated service --------------------------------------------------------
 resource "google_cloud_run_v2_service" "command_center" {
+  count    = var.enable_command_center ? 1 : 0
   name     = "command-center"
   location = var.region
 
@@ -176,7 +199,7 @@ resource "google_cloud_run_v2_service" "command_center" {
   ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
 
   template {
-    service_account = google_service_account.command_center_run.email
+    service_account = google_service_account.command_center_run[0].email
 
     scaling {
       min_instance_count = 0
@@ -205,7 +228,9 @@ resource "google_cloud_run_v2_service" "command_center" {
       # REQUIRED and load-bearing: a non-empty GOOGLE_CLIENT_ID both wires up real
       # OIDC sign-in AND arms the backend's fail-closed guard — with it set, a
       # stray DEV_AUTH=1 makes the app refuse to start (command_center/config.py).
-      # The variable has no default, so a blank value can never ship.
+      # cc_google_client_id defaults to "" ONLY so the pipeline resolves while this
+      # service is gated OFF; the var's validation rejects a blank the instant
+      # enable_command_center flips to true, so a blank value can never ship live.
       env {
         name  = "GOOGLE_CLIENT_ID"
         value = var.cc_google_client_id
@@ -225,7 +250,7 @@ resource "google_cloud_run_v2_service" "command_center" {
         name = "SESSION_SECRET"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.cc_session_secret.secret_id
+            secret  = google_secret_manager_secret.cc_session_secret[0].secret_id
             version = "latest"
           }
         }
@@ -234,7 +259,7 @@ resource "google_cloud_run_v2_service" "command_center" {
         name = "GOOGLE_CLIENT_SECRET"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.cc_google_client_secret.secret_id
+            secret  = google_secret_manager_secret.cc_google_client_secret[0].secret_id
             version = "latest"
           }
         }
@@ -243,7 +268,7 @@ resource "google_cloud_run_v2_service" "command_center" {
         name = "GITHUB_TOKEN"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.cc_github_token.secret_id
+            secret  = google_secret_manager_secret.cc_github_token[0].secret_id
             version = "latest"
           }
         }
@@ -252,7 +277,7 @@ resource "google_cloud_run_v2_service" "command_center" {
         name = "DATABASE_URL"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.cc_database_url.secret_id
+            secret  = google_secret_manager_secret.cc_database_url[0].secret_id
             version = "latest"
           }
         }
