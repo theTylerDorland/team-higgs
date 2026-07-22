@@ -31,7 +31,8 @@ Terraform assumes these already exist (see `docs/stack-devops.md` "Day zero"):
 3. **Terraform state bucket** — a GCS bucket with **object versioning enabled**.
    Its name goes in `backend.hcl` (see `backend.hcl.example`).
 4. **WIF pool/provider + CI service account** bound to the GitHub repo — used by
-   the CI apply workflow (a follow-up). Not needed for the day-zero local apply.
+   the CI plan/apply workflow (`.github/workflows/terraform.yml`; see
+   `terraform-ci.md`). Not needed for the day-zero local apply.
 
 The day-zero `terraform apply` runs locally under Tyler's own `gcloud`
 application-default credentials. No service-account key file is ever used.
@@ -99,6 +100,11 @@ The first apply uses the placeholder image; the service comes up healthy on
 `/healthz`. Then: build + push the real plant-log image to Artifact Registry and
 `gcloud run deploy` it (or let the CI deploy workflow — a follow-up — do it).
 Terraform ignores image changes and will not revert the shipped revision.
+
+> **CI now owns Terraform apply.** After the day-zero / bootstrap local applies,
+> `terraform plan` runs on PRs and `terraform apply` runs on merge to `main` via
+> `.github/workflows/terraform.yml`. See `terraform-ci.md` for the auth model
+> (two WIF identities), the one-time setup, and rollback.
 
 ## WIF trust model — operational (READ before granting CI to a new repo)
 

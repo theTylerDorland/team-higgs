@@ -1,0 +1,192 @@
+# =============================================================================
+# Terraform CI — plan-on-PR, apply-on-merge (task #23).
+#
+# Tyler's decision: the PR review + merge IS the deploy gate. There is no
+# separate apply approval and no manual environment gate. This workflow makes
+# that structural:
+#
+#   * pull_request touching infra/  -> `terraform plan`, posted as a PR comment.
+#   * push to main touching infra/  -> `terraform apply -auto-approve`.
+#
+# This is the ONLY sanctioned path to `terraform apply`; local applies end here
+# (the agent harness blocks agents from applying locally, so CI is the fix).
+#
+# AUTH — Workload Identity Federation, no long-lived keys (docs/stack-devops.md):
+#   * apply job impersonates `github-ci` — assumable ONLY from refs/heads/main
+#     (authoritative WIF binding, task #14 hardening). It holds the write/admin
+#     roles Terraform apply needs (infra/ci_iam.tf).
+#   * plan job impersonates the READ-ONLY `terraform-plan` SA — assumable from
+#     any ref of this repo, so pull_request workflows can plan. It cannot modify
+#     infrastructure. See infra/ci_iam.tf and infra/terraform-ci.md.
+# The two identities are deliberately split so the powerful (write/admin)
+# identity is never assumable from pre-merge PR workflow code.
+#
+# WORKFLOW EXCEPTION: written under the governed implementer-devops exception
+# (task #23, Tyler-approved). Permissions/secret/action surface is documented in
+# the PR "Surface" section and summarized inline below.
+#
+# ONE-TIME SETUP before CI can run (see infra/terraform-ci.md):
+#   * Repo variable WIF_PROVIDER = full provider resource name
+#     (`terraform output wif_provider_name`).
+#   * A bootstrap `terraform apply` (local, Tyler) that creates the CI role
+#     grants + the terraform-plan SA — CI cannot apply the change that grants CI
+#     its own permissions. From the next infra PR onward, CI owns apply.
+# =============================================================================
+
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform.yml"
+
+# Least-privilege default for the whole workflow; each job widens only what it
+# needs. id-token: write (OIDC for WIF) and pull-requests: write (plan comment)
+# are granted per-job, not here.
+permissions:
+  contents: read
+
+# Serialize per ref. PR runs supersede each other (cancel stale plans); the main
+# apply run is NEVER cancelled mid-flight and applies queue behind each other.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # PLAN — pull_request only. Read-only identity; posts the plan as a comment.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: terraform plan (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the GitHub OIDC token for WIF
+      pull-requests: write # post/update the plan comment
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # google-github-actions/auth v2.1.7 — exchange the OIDC token for
+      # short-lived creds impersonating the READ-ONLY terraform-plan SA.
+      - name: Authenticate to GCP (WIF, read-only plan identity)
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: terraform-plan@team-higgs-platform.iam.gserviceaccount.com
+
+      # hashicorp/setup-terraform v3.1.2
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      # backend bucket is non-secret and stable; must match backend.hcl / the
+      # day-zero state bucket. -lock=false: a plan never needs the state lock.
+      - name: terraform init
+        run: terraform init -input=false -backend-config="bucket=team-higgs-platform-tfstate"
+
+      - name: terraform fmt (check)
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set -o pipefail
+          terraform plan -no-color -input=false -lock=false -out=tf.plan
+          terraform show -no-color tf.plan > plan.txt
+
+      # actions/github-script v7.0.1 — upsert a single sticky plan comment.
+      - name: Post plan as PR comment
+        if: always() && steps.plan.outcome != 'cancelled'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- terraform-plan-comment -->';
+            let body;
+            try {
+              let plan = fs.readFileSync('infra/plan.txt', 'utf8');
+              const max = 60000;
+              if (plan.length > max) {
+                // keep the tail — the "Plan: X to add…" summary is at the end.
+                plan = '...[truncated; see the Actions run log for the full plan]...\n'
+                     + plan.slice(plan.length - max);
+              }
+              body = `${marker}\n### \`terraform plan\` (read-only)\n\n\`\`\`hcl\n${plan}\n\`\`\`\n`;
+            } catch (e) {
+              body = `${marker}\n### \`terraform plan\` failed\n\nThe plan step did not produce output. See the Actions run log.\n`;
+            }
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
+              });
+            }
+
+  # ---------------------------------------------------------------------------
+  # APPLY — push to main only. Write/admin identity (github-ci), main-ref bound.
+  # ---------------------------------------------------------------------------
+  apply:
+    name: terraform apply (main)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the GitHub OIDC token for WIF
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # google-github-actions/auth v2.1.7 — impersonate github-ci (write/admin).
+      # Only works from refs/heads/main: the github-ci WIF binding is
+      # authoritative to attribute.ref/refs/heads/main (wif.tf).
+      - name: Authenticate to GCP (WIF, apply identity)
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: github-ci@team-higgs-platform.iam.gserviceaccount.com
+
+      # hashicorp/setup-terraform v3.1.2
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform init -input=false -backend-config="bucket=team-higgs-platform-tfstate"
+
+      # apply re-plans and applies. prevent_destroy on stateful resources makes
+      # any destroy plan ERROR here rather than execute — the guard, not a gap.
+      # -lock-timeout survives brief lock contention if runs queue.
+      - name: terraform apply
+        run: terraform apply -auto-approve -input=false -lock-timeout=120s

@@ -9,3 +9,7 @@ crash.log
 terraform.tfvars
 backend.hcl
 *.auto.tfvars
+# EXCEPTION: ci.auto.tfvars is deliberately COMMITTED — it holds ONLY non-secret
+# config that CI needs (project id, region, allow-list, OAuth client ID, public
+# URLs, placeholder image). No secret ever goes in it. See infra/terraform-ci.md.
+!ci.auto.tfvars

@@ -24,8 +24,13 @@ output "wif_provider_name" {
 }
 
 output "ci_service_account" {
-  description = "Email of the github-ci service account that CI impersonates via WIF; use as `service_account` in google-github-actions/auth."
+  description = "Email of the github-ci service account that CI impersonates via WIF for terraform APPLY (push to main); use as `service_account` in google-github-actions/auth in the apply job."
   value       = data.google_service_account.github_ci.email
+}
+
+output "terraform_plan_service_account" {
+  description = "Email of the read-only terraform-plan service account that PR workflows impersonate via WIF for terraform PLAN; use as `service_account` in google-github-actions/auth in the plan job."
+  value       = google_service_account.terraform_plan.email
 }
 
 output "secret_ids" {
