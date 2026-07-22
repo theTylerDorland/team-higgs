@@ -28,6 +28,14 @@ output "ci_service_account" {
   value       = data.google_service_account.github_ci.email
 }
 
+output "dns_zone_nameservers" {
+  description = "Cloud DNS nameservers per zone. These are the values Tyler sets at the registrar to delegate each domain (the ONE-TIME manual NS switch in infra/dns-cutover.md). Read after apply; do NOT switch NS until replication is verified."
+  value = {
+    "airportbar.app"   = google_dns_managed_zone.airportbar_app.name_servers
+    "tylerdorland.com" = google_dns_managed_zone.tylerdorland_com.name_servers
+  }
+}
+
 output "secret_ids" {
   description = "Secret Manager secret IDs the service reads at runtime."
   value = {
