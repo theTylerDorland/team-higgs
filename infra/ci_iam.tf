@@ -222,3 +222,68 @@ resource "time_sleep" "dns_iam_propagation" {
     google_project_iam_member.github_ci_serviceusage_admin,
   ]
 }
+
+# -----------------------------------------------------------------------------
+# Command-center reachability fronting grants (task #38) — needed for
+# infra/command_center_lb.tf.
+#
+# The IAP-fronted external HTTPS load balancer introduces two resource classes
+# github-ci could not previously manage:
+#   * the LB graph (global address, managed SSL cert, serverless NEG, backend
+#     service, URL map, target HTTPS proxy, global forwarding rule), and
+#   * IAP (enabling it on the backend service + setting its httpsResourceAccessor
+#     IAM policy for Tyler).
+# github-ci held NEITHER capability, so the apply-on-merge over command_center_lb.tf
+# would 403 without these two additive _member grants (same failure mode the DNS
+# module hit in task #36). Both are project-scoped: LB resources and API/IAP admin
+# have no narrower predefined role that covers the full set here.
+#
+# API enablement (compute.googleapis.com, iap.googleapis.com) is already covered:
+# github-ci holds roles/serviceusage.serviceUsageAdmin from the DNS work above.
+#
+# SELF-GRANT within a single apply, EXACTLY as the DNS grants: github-ci holds
+# roles/resourcemanager.projectIamAdmin (above), so the same apply-on-merge run
+# that adds these bindings is authorized to write them. To de-risk the FIRST apply
+# (the DNS module's first apply failed for want of a pre-grant), Higgs also grants
+# both roles out-of-band BEFORE merge (PR "Surface" / "out-of-band IAM grants");
+# these _member resources then idempotently ADOPT the existing grants (0 destroy).
+# This is a PRIVILEGE EXPANSION of the CI identity — flagged for security review.
+# -----------------------------------------------------------------------------
+
+# roles/compute.loadBalancerAdmin — create/manage the entire LB graph in
+# command_center_lb.tf: global address, managed SSL certificate, serverless
+# (region) network endpoint group, backend service, URL map, target HTTPS proxy,
+# and global forwarding rule. This is the purpose-built predefined role for
+# external LB management and is the minimum that spans all seven resource types;
+# no resource-scoped role covers global LB objects.
+resource "google_project_iam_member" "github_ci_lb_admin" {
+  project = var.project_id
+  role    = "roles/compute.loadBalancerAdmin"
+  member  = local.github_ci_member
+}
+
+# roles/iap.admin — enable IAP on the backend service AND set the IAP resource's
+# IAM policy (roles/iap.httpsResourceAccessor to Tyler, command_center_lb.tf).
+# iap.settingsAdmin can toggle IAP but cannot setIamPolicy on the IAP resource;
+# iap.admin is the minimum predefined role covering both. SECURITY NOTE: this lets
+# github-ci grant IAP access to any principal on IAP-protected resources in the
+# project — bounded to IAP, but a privilege surface; flagged for security review.
+resource "google_project_iam_member" "github_ci_iap_admin" {
+  project = var.project_id
+  role    = "roles/iap.admin"
+  member  = local.github_ci_member
+}
+
+# IAM-propagation barrier for the two grants above — same rationale and shape as
+# time_sleep.dns_iam_propagation. The command_center_lb.tf resources that need
+# these roles (the global address, and transitively the rest of the graph)
+# depend_on this. When Higgs pre-grants the roles out-of-band before merge, the
+# bindings adopt existing grants and this wait is a no-op after first create.
+resource "time_sleep" "cc_lb_iam_propagation" {
+  create_duration = "90s"
+
+  depends_on = [
+    google_project_iam_member.github_ci_lb_admin,
+    google_project_iam_member.github_ci_iap_admin,
+  ]
+}
