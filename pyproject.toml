@@ -4,7 +4,15 @@ version = "0.1.0"
 description = "Platform state CLI for the agent engineering team."
 requires-python = ">=3.12"
 dependencies = [
-    "typer>=0.12,<0.16",
+    # typer floor is 0.16: earlier typer pins click<8.2, which strands click
+    # on 8.1.x below the PYSEC-2026-2132 fix (8.3.3). typer 0.16+ lifts that cap.
+    # Ceiling is <0.26: typer 0.26 changed exception handling so a raised
+    # click.ClickException no longer exits with its custom `exit_code` (our typed
+    # errors in emctl/errors.py rely on that). Adapting to 0.26+ is a follow-up.
+    "typer>=0.16,<0.26",
+    # click is imported directly (emctl/errors.py). Floor is the PYSEC-2026-2132
+    # fix; declaring it here pins the fix rather than trusting transitive luck.
+    "click>=8.3.3,<9",
     "psycopg[binary]>=3.2,<4",
     # Alembic drives migrations; it depends on SQLAlchemy, which env.py uses
     # directly to build a psycopg3 engine for the `migrate` command.
@@ -19,7 +27,13 @@ emctl = "emctl.cli:app"
 # The command-center web service (task #27). Kept out of the base install so
 # emctl (the CLI) never pulls FastAPI; the service reuses emctl's data layer.
 web = [
-    "fastapi>=0.111,<0.116",
+    # fastapi floor is 0.135: earlier fastapi caps starlette <0.47, stranding it
+    # on 0.46.2 below the starlette CVE fixes. fastapi 0.135+ drops that upper
+    # bound, letting starlette resolve to a fixed (>=1.3.1) release.
+    "fastapi>=0.135,<0.140",
+    # starlette is imported directly (command_center/main.py). Floor is 1.3.1,
+    # the release that clears all of PYSEC-2026-161/248/249/1941/1942/2280/2281.
+    "starlette>=1.3.1,<2",
     "uvicorn>=0.30",
     "httpx>=0.27",
     "pydantic>=2.7",
